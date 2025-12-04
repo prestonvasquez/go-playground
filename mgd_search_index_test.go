@@ -14,7 +14,7 @@ import (
 
 // What happens when a name and type are not provided when creating a search
 // index?
-func TestSearchIndexDefault(t *testing.T) {
+func TestMGDSearchIndexDefault(t *testing.T) {
 	// Create an Atlas test client
 	client, teardown := atlaslocal.New(t, context.Background())
 	defer teardown(t)
