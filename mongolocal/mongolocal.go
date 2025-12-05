@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
@@ -19,8 +20,9 @@ import (
 type TeardownFunc func(t *testing.T)
 
 type options struct {
-	mongoClientOpts *mongooptions.ClientOptions
-	image           string
+	mongoClientOpts    *mongooptions.ClientOptions
+	image              string
+	enableTestCommands bool
 }
 
 // NewAtlasLocalOption is a function that configures NewAtlasLocal.
@@ -37,6 +39,14 @@ func WithMongoClientOptions(opts *mongooptions.ClientOptions) Option {
 func WithImage(image string) Option {
 	return func(o *options) {
 		o.image = image
+	}
+}
+
+// WithEnableTestCommands enables MongoDB test commands including failCommand failpoint.
+// This adds --setParameter enableTestCommands=1 to the mongod startup.
+func WithEnableTestCommands() Option {
+	return func(o *options) {
+		o.enableTestCommands = true
 	}
 }
 
@@ -87,6 +97,12 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 		containerOpts = append(containerOpts, testcontainers.WithWaitStrategy(waitStrategy))
 	}
 
+	// Enable test commands if requested
+	if opts.enableTestCommands {
+		containerOpts = append(containerOpts,
+			testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
+	}
+
 	mongolocalContainer, err := mongodb.Run(ctx, image, containerOpts...)
 	require.NoError(t, err, "failed to start atlaslocal container")
 
@@ -123,4 +139,10 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 		require.NoError(t, mongoClient.Disconnect(ctx), "failed to disconnect mongo client")
 		tdFunc(t)
 	}
+}
+
+// ArbColl returns a collection with an arbitrary name in an arbitrary database
+// intended for one-off use in tests.
+func ArbColl(client *mongo.Client) *mongo.Collection {
+	return client.Database(uuid.New().String()).Collection(uuid.New().String())
 }
