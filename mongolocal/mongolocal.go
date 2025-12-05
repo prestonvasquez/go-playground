@@ -2,11 +2,14 @@ package mongolocal
 
 import (
 	"context"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	mongooptions "go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -37,6 +40,27 @@ func WithImage(image string) Option {
 	}
 }
 
+// needsCustomWaitStrategy checks if the MongoDB image version requires a custom
+// wait strategy. MongoDB 4.x and earlier use lowercase "waiting for
+// connections".
+func needsCustomWaitStrategy(image string) bool {
+	// Extract version from image string.
+	re := regexp.MustCompile(`mongo:?(\d+)\.`)
+	matches := re.FindStringSubmatch(image)
+	if len(matches) < 2 {
+		// Can't determine version, use default wait strategy
+		return false
+	}
+
+	majorVersion, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return false
+	}
+
+	// MongoDB 4.x and earlier need the custom strategy
+	return majorVersion <= 4
+}
+
 // New creates a new MongoDB test container and returns a connected mongo.Client
 // and a TeardownFunc to clean up resources.
 func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
@@ -52,7 +76,18 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 		image = opts.image
 	}
 
-	mongolocalContainer, err := mongodb.Run(ctx, image)
+	// MongoDB 4.x and earlier use lowercase "waiting for connections"
+	// Only override the default wait strategy for these older versions
+	var containerOpts []testcontainers.ContainerCustomizer
+	if needsCustomWaitStrategy(image) {
+		waitStrategy := wait.ForAll(
+			wait.ForLog("(?i)waiting for connections").AsRegexp().WithOccurrence(1),
+			wait.ForListeningPort("27017/tcp"),
+		)
+		containerOpts = append(containerOpts, testcontainers.WithWaitStrategy(waitStrategy))
+	}
+
+	mongolocalContainer, err := mongodb.Run(ctx, image, containerOpts...)
 	require.NoError(t, err, "failed to start atlaslocal container")
 
 	tdFunc := func(t *testing.T) {

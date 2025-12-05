@@ -14,7 +14,7 @@ func TestMGDOverwriteMinimumSupportedWireVersion(t *testing.T) {
 	topology.MinSupportedMongoDBVersion = "4.0"
 	topology.SupportedWireVersions = description.VersionRange{Min: 7, Max: 25}
 
-	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithImage("mongo:6"))
+	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithImage("mongo:4.0"))
 	defer teardown(t)
 
 	require.NoError(t, client.Ping(context.Background(), nil))
