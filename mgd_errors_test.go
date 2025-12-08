@@ -14,7 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
-func TestErrorsAsFromCommandFailedEvent(t *testing.T) {
+func TestMGDErrorsAsFromCommandFailedEvent(t *testing.T) {
 	// If we get an error in the CommandFailedEvent, can we use errors.As to
 	// get the error codes via mongo.ServerError?
 
