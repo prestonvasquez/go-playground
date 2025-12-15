@@ -42,12 +42,14 @@ that handles your custom type while preserving default behavior:
 
 ```go reg := bson.NewRegistry() baseDec, _ :=
 reg.LookupDecoder(reflect.TypeOf(time.Time{}))
-reg.RegisterTypeDecoder(reflect.TypeOf(time.Time{}), customWrapper(baseDec)) ```
+reg.RegisterTypeDecoder(reflect.TypeOf(time.Time{}), customWrapper(baseDec))
+```
 
 ## CLI: Grep: How to grep filenames with extensions?
 
 ```bash grep -R -l \ --include='*.yml' --include='*.yaml' \
---exclude-dir='testdata' \ -e . . ```
+--exclude-dir='testdata' \ -e . .
+```
 
 ## Client: EventMonitor: Can you mutate a monitor after it's been set?
 
