@@ -2,9 +2,11 @@ package mongolocal
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -23,6 +25,7 @@ type options struct {
 	mongoClientOpts    *mongooptions.ClientOptions
 	image              string
 	enableTestCommands bool
+	replSetName        string
 }
 
 // NewAtlasLocalOption is a function that configures NewAtlasLocal.
@@ -71,25 +74,31 @@ func needsCustomWaitStrategy(image string) bool {
 	return majorVersion <= 4
 }
 
+// WithReplicaSet configures the MongoDB container to run as a replica set with
+// the given name.
+func WithReplicaSet(replSetName string) Option {
+	return func(o *options) {
+		o.replSetName = replSetName
+	}
+}
+
 // New creates a new MongoDB test container and returns a connected mongo.Client
 // and a TeardownFunc to clean up resources.
 func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
 	t.Helper()
 
-	opts := &options{}
-	for _, apply := range optionFuncs {
-		apply(opts)
+	opts := &options{
+		image: "mongo:latest",
 	}
 
-	image := "mongo:latest"
-	if opts.image != "" {
-		image = opts.image
+	for _, apply := range optionFuncs {
+		apply(opts)
 	}
 
 	// MongoDB 4.x and earlier use lowercase "waiting for connections"
 	// Only override the default wait strategy for these older versions
 	var containerOpts []testcontainers.ContainerCustomizer
-	if needsCustomWaitStrategy(image) {
+	if needsCustomWaitStrategy(opts.image) {
 		waitStrategy := wait.ForAll(
 			wait.ForLog("(?i)waiting for connections").AsRegexp().WithOccurrence(1),
 			wait.ForListeningPort("27017/tcp"),
@@ -99,11 +108,20 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 
 	// Enable test commands if requested
 	if opts.enableTestCommands {
+		t.Log("Enabling test commands in mongod")
+
 		containerOpts = append(containerOpts,
 			testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
 	}
 
-	mongolocalContainer, err := mongodb.Run(ctx, image, containerOpts...)
+	if opts.replSetName != "" {
+		t.Logf("Configuring replica set with name %s", opts.replSetName)
+
+		containerOpts = append(containerOpts,
+			mongodb.WithReplicaSet(opts.replSetName))
+	}
+
+	mongolocalContainer, err := mongodb.Run(ctx, opts.image, containerOpts...)
 	require.NoError(t, err, "failed to start atlaslocal container")
 
 	tdFunc := func(t *testing.T) {
@@ -119,6 +137,18 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 		t.Fatalf("failed to get connection string: %s", err)
 	}
 
+	if opts.replSetName != "" {
+		// This is a bug in testcontainers-go where the replica set name is not
+		// included. No idea why it matters.
+		host, err := mongolocalContainer.Host(ctx)
+		require.NoError(t, err, "failed to get container host")
+
+		port, err := mongolocalContainer.MappedPort(ctx, "27017")
+		require.NoError(t, err, "failed to get mapped port")
+
+		connString = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, port.Port())
+	}
+
 	mopts := opts.mongoClientOpts
 	if mopts == nil {
 		mopts = mongooptions.Client()
@@ -132,6 +162,11 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 		tdFunc(t)
 		t.Fatalf("failed to connect to mongo: %s", err)
 	}
+
+	require.Eventually(t, func() bool {
+		err := mongoClient.Ping(ctx, nil)
+		return err == nil
+	}, 60*time.Second, 5*time.Second)
 
 	return mongoClient, func(t *testing.T) {
 		t.Helper()

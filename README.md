@@ -24,6 +24,9 @@ Minimalist Q&A style. Sections use `##` headings and follow the format:
   provided?](#searchindex-defaultbehavior-what-happens-when-name-and-type-are-not-provided)
 - [Sessions: SnapshotTime: Can clients read at a time outside a session's
   lifecycle?](#sessions-snapshottime-can-clients-read-at-a-time-outside-a-sessions-lifecycle)
+- [Sessions: SnapshotTime: Does using a snapshot time older than a pooled
+  session's lastUse cause
+  conflicts?](#sessions-snapshottime-does-using-a-snapshot-time-older-than-a-pooled-sessions-lastuse-cause-conflicts)
 - [Sessions: SnapshotTime: How does the server know to return the same
   atClusterTime?](#sessions-snapshottime-how-does-the-server-know-to-return-the-same-atclustertime)
 - [Sessions: SnapshotTime: Why does the spec specify "first"
@@ -89,6 +92,18 @@ Yes. The timestamp is just a point in the database's oplog history. The session
 is a temporary resource handle saying "I'm currently reading at this time."
 Multiple sessions can read at the same timestamp, and you can reuse a timestamp
 from an ended session (if the server hasn't compacted that history yet).
+
+## Sessions: SnapshotTime: Does using a snapshot time older than a pooled
+session's lastUse cause conflicts?
+
+[Test: mgd_session_test.go:16](mgd_session_test.go#L16)
+
+No, for non-transactional snapshot reads. The server does not return
+WriteConflict or InvalidOptions when a pooled session's lastUse is newer than
+the requested atClusterTime. However, transactions with readConcern "snapshot"
+and atClusterTime on a reused server session can hit WriteConflict at commit
+time. Snapshot sessions cannot be used in transactions (per spec), so this
+conflict scenario doesn't apply to snapshotTime on snapshot sessions.
 
 ## Sessions: SnapshotTime: How does the server know to return the same
 atClusterTime?
