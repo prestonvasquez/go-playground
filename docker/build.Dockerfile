@@ -37,7 +37,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-utils \
     libc6-dev \
     gcc \
-    make && \
+    make \
+    libkrb5-dev && \
   update-ca-certificates && \
   rm -rf /var/lib/apt/lists/*
 
