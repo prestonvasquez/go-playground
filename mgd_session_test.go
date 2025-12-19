@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prestonvasquez/go-playground/examplepkg"
 	"github.com/prestonvasquez/go-playground/mongolocal"
 	"github.com/prestonvasquez/go-playground/timeutil"
 	"github.com/stretchr/testify/require"
@@ -86,4 +87,23 @@ func TestMgdSession_SnapshotPoolConflict(t *testing.T) {
 	// snapshotTime on a snapshot session cannot reproduce or avoid that
 	// transactional conflict.
 	require.Error(t, mongo.ErrNoDocuments, findRes.Err())
+}
+
+func TestMgdSession_ClientSessionAccessors(t *testing.T) {
+	t.Run("Mutating with pointer accessor", func(t *testing.T) {
+		sess := examplepkg.NewSession() // timestamp T=1, I=0
+
+		sess.ClientSessionPtr().SnapshotTime = bson.Timestamp{T: 5, I: 10}
+		require.Equal(t, bson.Timestamp{T: 5, I: 10}, sess.ClientSession().SnapshotTime)
+	})
+
+	t.Run("Non-mutating with value accessor", func(t *testing.T) {
+		sess := examplepkg.NewSession() // timestamp T=1, I=0
+
+		snapTime := sess.ClientSession().SnapshotTime
+		snapTime.T = 10
+
+		// Mutating top-level value does not affect underlying struct.
+		require.Equal(t, bson.Timestamp{T: 1, I: 0}, sess.ClientSession().SnapshotTime)
+	})
 }
