@@ -33,7 +33,7 @@ func readi32(src []byte) (int32, []byte, bool) {
 	return value, src[4:], true
 }
 
-func Test_read32(t *testing.T) {
+func TestMGD_read32(t *testing.T) {
 	_, src, err := bson.MarshalValue(math.MaxUint32)
 	require.NoError(t, err)
 
@@ -42,7 +42,7 @@ func Test_read32(t *testing.T) {
 	require.Equal(t, int32(-1), i32) // overflow
 }
 
-func Test_readi32(t *testing.T) {
+func TestMGD_readi32(t *testing.T) {
 	_, src, err := bson.MarshalValue(math.MaxUint32)
 	require.NoError(t, err)
 
