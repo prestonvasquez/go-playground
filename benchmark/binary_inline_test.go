@@ -31,13 +31,13 @@ func inlineLittleEndianUint32(b []byte) uint32 {
 	return binary.LittleEndian.Uint32(b)
 }
 
-func copyLittleEndianUint32(b []byte) uint32 {
+func copyLittleEndianUint32(b []byte) int32 {
 	_ = b[3] // bounds check hint to compiler
 
-	value := uint32(b[0]) |
-		uint32(b[1])<<8 |
-		uint32(b[2])<<16 |
-		uint32(b[3])<<24
+	value := int32(b[0]) |
+		int32(b[1])<<8 |
+		int32(b[2])<<16 |
+		int32(b[3])<<24
 
 	return value
 }
