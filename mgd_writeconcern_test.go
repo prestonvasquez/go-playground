@@ -12,6 +12,8 @@ import (
 )
 
 func TestMGD_MarshalingWriteConcern(t *testing.T) {
+	// Can writeconcern.WriteConcern be marshaled into BSON?
+
 	wcBytes, err := bson.Marshal(writeconcern.Majority())
 	require.NoError(t, err)
 
