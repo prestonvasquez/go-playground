@@ -176,8 +176,14 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 	}
 }
 
+// ArbDB returns a database with an arbitrary name intended for one-off use in
+// tests.
+func ArbDB(client *mongo.Client) *mongo.Database {
+	return client.Database(uuid.New().String())
+}
+
 // ArbColl returns a collection with an arbitrary name in an arbitrary database
 // intended for one-off use in tests.
 func ArbColl(client *mongo.Client) *mongo.Collection {
-	return client.Database(uuid.New().String()).Collection(uuid.New().String())
+	return ArbDB(client).Collection(uuid.New().String())
 }
