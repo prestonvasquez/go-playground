@@ -135,3 +135,19 @@ func NewSingleErr(cmdName string, errCode int32) FailPoint {
 		},
 	}
 }
+
+// NewSingleBlock creates a FailPoint that will cause the specified command to
+// block once for the given number of milliseconds.
+func NewSingleBlock(cmdName string, blockTimeMS int32) FailPoint {
+	return FailPoint{
+		ConfigureFailPoint: "failCommand",
+		Mode: Mode{
+			Times: 1,
+		},
+		Data: Data{
+			FailCommands:    []string{cmdName},
+			BlockConnection: true,
+			BlockTimeMS:     blockTimeMS,
+		},
+	}
+}
