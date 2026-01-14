@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	mongov1 "go.mongodb.org/mongo-driver/mongo"
 )
 
 const (
@@ -74,6 +76,39 @@ type TeardownFunc func(t *testing.T)
 // create the failpoint will appear in command monitoring channels. The fail
 // point will automatically be disabled after this test has run.
 func Enable(t *testing.T, client *mongo.Client, fp FailPoint) TeardownFunc {
+	t.Helper()
+
+	if modeMap, ok := fp.Mode.(map[string]any); ok {
+		var key string
+		var err error
+
+		if times, ok := modeMap["times"]; ok {
+			key = "times"
+			modeMap["times"], err = interfaceToInt32(times)
+		}
+		if skip, ok := modeMap["skip"]; ok {
+			key = "skip"
+			modeMap["skip"], err = interfaceToInt32(skip)
+		}
+
+		require.NoError(t, err, "failed to convert failpoint mode %q to int32", key)
+	}
+
+	admin := client.Database("admin")
+	require.NoError(t, admin.RunCommand(context.Background(), fp).Err(), "error enabling failpoint")
+
+	return func(t *testing.T) {
+		db := client.Database("admin")
+		cmd := FailPoint{
+			ConfigureFailPoint: fp.ConfigureFailPoint,
+			Mode:               ModeOff,
+		}
+
+		require.NoError(t, db.RunCommand(context.Background(), cmd).Err())
+	}
+}
+
+func EnableV1(t *testing.T, client *mongov1.Client, fp FailPoint) TeardownFunc {
 	t.Helper()
 
 	if modeMap, ok := fp.Mode.(map[string]any); ok {

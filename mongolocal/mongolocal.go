@@ -20,6 +20,9 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	mongooptions "go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	mongov1 "go.mongodb.org/mongo-driver/mongo"
+	mongooptionsv1 "go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -34,6 +37,7 @@ type TeardownFunc func(t *testing.T)
 
 type options struct {
 	mongoClientOpts    *mongooptions.ClientOptions
+	mongoClientOptsV1  *mongooptionsv1.ClientOptions
 	image              string
 	enableTestCommands bool
 	replSetName        string
@@ -81,6 +85,16 @@ type Option func(*options)
 func WithMongoClientOptions(opts *mongooptions.ClientOptions) Option {
 	return func(o *options) {
 		o.mongoClientOpts = opts
+	}
+}
+
+// WithMongoClientOptionsV1 configures the v1 mongo.Client options used to
+// connect.
+//
+// This cannot be used together with WithMongoClientOptions.
+func WithMongoClientOptionsV1(opts *mongooptionsv1.ClientOptions) Option {
+	return func(o *options) {
+		o.mongoClientOptsV1 = opts
 	}
 }
 
@@ -142,9 +156,13 @@ func WithOIDC(cfg *OIDCConfig) Option {
 	}
 }
 
-// New creates a new MongoDB test container and returns a connected mongo.Client
-// and a TeardownFunc to clean up resources.
-func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
+type newResult struct {
+	clientV2 *mongo.Client
+	clientV1 *mongov1.Client
+	teardown TeardownFunc
+}
+
+func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 	t.Helper()
 
 	opts := &options{
@@ -154,6 +172,10 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 	for _, apply := range optionFuncs {
 		apply(opts)
 	}
+
+	// Both v1 and v2 mongo client options cannot be set.
+	require.False(t, opts.mongoClientOpts != nil && opts.mongoClientOptsV1 != nil,
+		"mongo.Client options v1 and v2 cannot both be set")
 
 	// OIDC requires a replica set.
 	require.True(t, opts.oidcConfig == nil || opts.oidcConfig != nil, "OIDC requires using a replica set")
@@ -213,13 +235,13 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 	}
 
 	mongolocalContainer, err := mongodb.Run(ctx, opts.image, containerOpts...)
-	require.NoError(t, err, "failed to start atlaslocal container")
+	require.NoError(t, err, "failed to start mongolocal container")
 
 	tdFunc := func(t *testing.T) {
 		t.Helper()
 
 		require.NoError(t, testcontainers.TerminateContainer(mongolocalContainer),
-			"failed to terminate atlaslocal container")
+			"failed to terminate mongolocal container")
 	}
 
 	connString, err := mongolocalContainer.ConnectionString(ctx)
@@ -252,28 +274,90 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 	mopts := opts.mongoClientOpts
 	if mopts == nil {
 		mopts = mongooptions.Client()
+
+		// Users can't override the connection string.
+		mopts = mopts.ApplyURI(connString)
 	}
 
-	// Users can't override the connection string.
-	mopts = mopts.ApplyURI(connString)
+	moptsV1 := opts.mongoClientOptsV1
+	if moptsV1 != nil {
+		// v1 only applies if explicitly requested.
 
-	mongoClient, err := mongo.Connect(mopts)
-	if err != nil {
-		tdFunc(t)
-		t.Fatalf("failed to connect to mongo: %s", err)
+		// Users can't override the connection string.
+		moptsV1 = moptsV1.ApplyURI(connString)
 	}
 
-	require.Eventually(t, func() bool {
-		err := mongoClient.Ping(ctx, nil)
-		return err == nil
-	}, 60*time.Second, 5*time.Second)
+	result := &newResult{}
 
-	return mongoClient, func(t *testing.T) {
-		t.Helper()
+	if moptsV1 != nil {
+		t.Log("Using v1 mongo client as requested")
 
-		require.NoError(t, mongoClient.Disconnect(ctx), "failed to disconnect mongo client")
-		tdFunc(t)
+		mongoClientV1, err := mongov1.Connect(ctx, moptsV1.ApplyURI(connString))
+		require.NoError(t, err, "failed to connect to v1 mongo client")
+
+		result.clientV1 = mongoClientV1
+		result.teardown = func(t *testing.T) {
+			t.Helper()
+
+			require.NoError(t, mongoClientV1.Disconnect(ctx), "failed to disconnect v1 mongo client")
+			tdFunc(t)
+		}
+
+		require.Eventually(t, func() bool {
+			err := mongoClientV1.Ping(ctx, nil)
+			return err == nil
+		}, 60*time.Second, 5*time.Second)
+
+		t.Log("Connected to mongolocal MongoDB V1 instance")
+	} else {
+		t.Log("Using v2 mongo client as requested")
+
+		// The default is v2 client.
+		mongoClient, err := mongo.Connect(mopts.ApplyURI(connString))
+		require.NoError(t, err, "failed to connect to mongo client")
+
+		result.clientV2 = mongoClient
+		result.teardown = func(t *testing.T) {
+			t.Helper()
+
+			require.NoError(t, mongoClient.Disconnect(ctx), "failed to disconnect mongo client")
+			tdFunc(t)
+		}
+
+		require.Eventually(t, func() bool {
+			err := mongoClient.Ping(ctx, nil)
+			return err == nil
+		}, 60*time.Second, 5*time.Second)
+
+		t.Log("Connected to mongolocal MongoDB V2 instance")
 	}
+
+	return result
+}
+
+// New creates a new MongoDB test container and returns a connected mongo.Client
+// and a TeardownFunc to clean up resources.
+func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
+	result := new(t, ctx, optionFuncs...)
+
+	return result.clientV2, result.teardown
+}
+
+// NewV1 creates a new MongoDB test container and returns a connected v1
+// mongo.Client
+func NewV1(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongov1.Client, TeardownFunc) {
+	opts := &options{}
+	for _, apply := range optionFuncs {
+		apply(opts)
+	}
+
+	if opts.mongoClientOptsV1 == nil {
+		optionFuncs = append(optionFuncs, WithMongoClientOptionsV1(mongooptionsv1.Client()))
+	}
+
+	result := new(t, ctx, optionFuncs...)
+
+	return result.clientV1, result.teardown
 }
 
 // ArbDB returns a database with an arbitrary name intended for one-off use in
@@ -286,6 +370,18 @@ func ArbDB(client *mongo.Client) *mongo.Database {
 // intended for one-off use in tests.
 func ArbColl(client *mongo.Client) *mongo.Collection {
 	return ArbDB(client).Collection(uuid.New().String())
+}
+
+// ArbDBV1 returns a database with an arbitrary name intended for one-off use in
+// v1 tests.
+func ArbDBV1(client *mongov1.Client) *mongov1.Database {
+	return client.Database(uuid.New().String())
+}
+
+// ArbCollV1 returns a collection with an arbitrary name in an arbitrary
+// database intended for one-off use in v1 tests.
+func ArbCollV1(client *mongov1.Client) *mongov1.Collection {
+	return ArbDBV1(client).Collection(uuid.New().String())
 }
 
 // oidcSecrets holds the secrets fetched from AWS Secrets Manager.

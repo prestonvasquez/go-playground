@@ -15,7 +15,7 @@ require (
 replace go.mongodb.org/mongo-driver/v2 => /Users/preston.vasquez/Developer/mongo-go-driver
 
 // V1
-//replace go.mongodb.org/mongo-driver => /Users/preston.vasquez/Developer/mongo-go-driver
+replace go.mongodb.org/mongo-driver => /Users/preston.vasquez/Developer/mongo-go-driver-2
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
