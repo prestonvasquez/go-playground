@@ -101,6 +101,9 @@ func New(t *testing.T, ctx context.Context, opts ...Option) (*mongo.Client, Tear
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context:    settings.detPath,
 			Dockerfile: settings.dockerfile,
+			Repo:       "det-mongodb",
+			Tag:        "latest",
+			KeepImage:  true,
 		},
 		Env: map[string]string{
 			"MONGODB_VERSION":       settings.mongoDBVersion,

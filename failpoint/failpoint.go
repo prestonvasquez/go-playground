@@ -186,3 +186,19 @@ func NewSingleBlock(cmdName string, blockTimeMS int32) FailPoint {
 		},
 	}
 }
+
+// NewBlock creates a FailPoint that will cause the specified commands to
+// block once for the given number of milliseconds.
+func NewBlock(blockTimeMS int32, times int32, cmds ...string) FailPoint {
+	return FailPoint{
+		ConfigureFailPoint: "failCommand",
+		Mode: Mode{
+			Times: times,
+		},
+		Data: Data{
+			FailCommands:    cmds,
+			BlockConnection: true,
+			BlockTimeMS:     blockTimeMS,
+		},
+	}
+}
