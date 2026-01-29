@@ -157,9 +157,20 @@ func WithOIDC(cfg *OIDCConfig) Option {
 }
 
 type newResult struct {
-	clientV2 *mongo.Client
-	clientV1 *mongov1.Client
-	teardown TeardownFunc
+	clientV2   *mongo.Client
+	clientV1   *mongov1.Client
+	teardown   TeardownFunc
+	connString string
+}
+
+// Env provides access to the underlying test environment.
+type Env struct {
+	connString string
+}
+
+// ConnectionString returns the MongoDB connection URI.
+func (e *Env) ConnectionString() string {
+	return e.connString
 }
 
 func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
@@ -287,7 +298,7 @@ func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 		moptsV1 = moptsV1.ApplyURI(connString)
 	}
 
-	result := &newResult{}
+	result := &newResult{connString: connString}
 
 	if moptsV1 != nil {
 		t.Log("Using v1 mongo client as requested")
@@ -341,6 +352,17 @@ func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Clien
 	result := new(t, ctx, optionFuncs...)
 
 	return result.clientV2, result.teardown
+}
+
+// NewWithEnv creates a new MongoDB test container and returns a connected
+// mongo.Client, a TeardownFunc, and an Env for accessing the underlying
+// test environment.
+func NewWithEnv(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc, *Env) {
+	result := new(t, ctx, optionFuncs...)
+
+	env := &Env{connString: result.connString}
+
+	return result.clientV2, result.teardown, env
 }
 
 // NewV1 creates a new MongoDB test container and returns a connected v1

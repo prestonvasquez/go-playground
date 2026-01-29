@@ -171,6 +171,47 @@ func NewSingleErr(cmdName string, errCode int32) FailPoint {
 	}
 }
 
+// NewSingleErrWithLabels creates a FailPoint that will cause the specified
+// command to Fail once with the given error code and error labels.
+func NewSingleErrWithLabels(cmdName string, errCode int32, errLabels []string) FailPoint {
+	return FailPoint{
+		ConfigureFailPoint: "failCommand",
+		Mode: Mode{
+			Times: 1,
+		},
+		Data: Data{
+			FailCommands: []string{cmdName},
+			ErrorCode:    errCode,
+			ErrorLabels:  &errLabels,
+		},
+	}
+}
+
+// NewAlwaysOnErrWithLabels creates a FailPoint that will cause the specified
+// command to always fail with the given error code and error labels.
+func NewAlwaysOnErrWithLabels(cmdName string, errCode int32, errLabels []string) FailPoint {
+	fp := FailPoint{
+		ConfigureFailPoint: "failCommand",
+		Mode:               ModeAlwaysOn,
+		Data: Data{
+			FailCommands: []string{cmdName},
+			ErrorCode:    errCode,
+		},
+	}
+
+	if errLabels != nil {
+		fp.Data.ErrorLabels = &errLabels
+	}
+
+	return fp
+}
+
+// NewAlwaysOnErr creates a FailPoint that will cause the specified command to
+// fail always with the given error code.
+func NewAlwaysOnErr(cmdName string, errCode int32) FailPoint {
+	return NewAlwaysOnErrWithLabels(cmdName, errCode, nil)
+}
+
 // NewSingleBlock creates a FailPoint that will cause the specified command to
 // block once for the given number of milliseconds.
 func NewSingleBlock(cmdName string, blockTimeMS int32) FailPoint {
