@@ -379,3 +379,43 @@ func TestMGD_CSOT_RetryableWrite_7c_MixedWriteAttempts(t *testing.T) {
 
 	// Step 6: Disable the fail point (handled by test cleanup).
 }
+
+func TestMGD_CSOT_Aggregate_MaxAwaitTimeMS_GreaterThan_TimeoutMS(t *testing.T) {
+	client, teardown := mongolocal.New(t, context.Background())
+	defer teardown(t)
+
+	db := client.Database("testdb")
+
+	// Create capped collection like the spec test
+	err := db.CreateCollection(context.Background(), "capped_coll", options.CreateCollection().SetCapped(true).SetSizeInBytes(500))
+	require.NoError(t, err)
+
+	coll := db.Collection("capped_coll")
+
+	// Insert 2 documents like the spec test
+	_, err = coll.InsertMany(context.Background(), []any{
+		bson.D{{"_id", 0}},
+		bson.D{{"_id", 1}},
+	})
+	require.NoError(t, err)
+
+	// Set timeoutMS=100ms and maxAwaitTimeMS=200ms (maxAwaitTimeMS >= timeoutMS)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	opts := options.Aggregate().SetMaxAwaitTime(200 * time.Millisecond).SetBatchSize(1)
+
+	cursor, err := coll.Aggregate(ctx, bson.A{}, opts)
+	if err != nil {
+		t.Logf("Aggregate error: %v", err)
+		t.Logf("IsTimeout: %v", mongo.IsTimeout(err))
+		return
+	}
+	defer cursor.Close(ctx)
+
+	// Mimic unified test: call cursor.All()
+	var docs []bson.Raw
+	err = cursor.All(ctx, &docs)
+	t.Logf("cursor.All() error: %v", err)
+	t.Logf("IsTimeout: %v", mongo.IsTimeout(err))
+}
