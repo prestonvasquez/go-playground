@@ -406,16 +406,10 @@ func TestMGD_CSOT_Aggregate_MaxAwaitTimeMS_GreaterThan_TimeoutMS(t *testing.T) {
 	opts := options.Aggregate().SetMaxAwaitTime(200 * time.Millisecond).SetBatchSize(1)
 
 	cursor, err := coll.Aggregate(ctx, bson.A{}, opts)
-	if err != nil {
-		t.Logf("Aggregate error: %v", err)
-		t.Logf("IsTimeout: %v", mongo.IsTimeout(err))
-		return
-	}
+	require.NoError(t, err)
+
 	defer cursor.Close(ctx)
 
-	// Mimic unified test: call cursor.All()
-	var docs []bson.Raw
-	err = cursor.All(ctx, &docs)
-	t.Logf("cursor.All() error: %v", err)
-	t.Logf("IsTimeout: %v", mongo.IsTimeout(err))
+	err = cursor.All(ctx, &([]bson.D{}))
+	require.NoError(t, err)
 }
