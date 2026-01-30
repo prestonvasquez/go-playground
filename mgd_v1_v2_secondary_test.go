@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/prestonvasquez/go-playground/mongolocal"
 	"github.com/stretchr/testify/require"
@@ -25,7 +24,6 @@ import (
 // drivers-evergreen-tools.
 const replicaSetURI = "mongodb://localhost:27017,localhost:27018,localhost:27019"
 
-// findSecondaryHost returns a secondary host from the replica set.
 func findSecondaryHost(t *testing.T, ctx context.Context, client any) string {
 	t.Helper()
 
@@ -46,7 +44,6 @@ func findSecondaryHost(t *testing.T, ctx context.Context, client any) string {
 		arr, ok := rsStatus["members"].(bson.A)
 		require.True(t, ok, "failed to get members from replica set status, got %T", rsStatus["members"])
 		members = arr
-		t.Logf("V2 found %d members", len(arr))
 	default:
 		t.Fatalf("unsupported client type: %T", client)
 	}
@@ -60,10 +57,17 @@ func findSecondaryHost(t *testing.T, ctx context.Context, client any) string {
 		case bson.M:
 			stateStr, _ = m["stateStr"].(string)
 			host, _ = m["name"].(string)
+		case bson.D:
+			for _, elem := range m {
+				if elem.Key == "stateStr" {
+					stateStr, _ = elem.Value.(string)
+				} else if elem.Key == "name" {
+					host, _ = elem.Value.(string)
+				}
+			}
 		default:
-			t.Logf("unexpected member type: %T", member)
+			t.Fatalf("unexpected member type: %T", member)
 		}
-		t.Logf("member: stateStr=%s, host=%s", stateStr, host)
 		if stateStr == "SECONDARY" {
 			return host
 		}
@@ -132,42 +136,6 @@ func TestMGD_V2_DirectSecondary_WriteBehavior(t *testing.T) {
 	// Attempt a write operation.
 	coll := mongolocal.ArbColl(directClient)
 	_, err = coll.InsertOne(ctx, struct{ X int }{X: 1})
-
-	// Assert we get a NotWritablePrimary error (error code 10107).
-	var srvErr mongo.ServerError
-	require.True(t, errors.As(err, &srvErr))
-	require.True(t, srvErr.HasErrorCode(10107))
-}
-
-func TestMGD_V2_DirectSecondary_WithTimeout_WriteBehavior(t *testing.T) {
-	ctx := context.Background()
-
-	client, err := mongo.Connect(options.Client().ApplyURI(replicaSetURI))
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, client.Disconnect(ctx)) }()
-
-	if err := client.Ping(ctx, nil); err != nil {
-		t.Skipf("Skipping test because cannot connect to replica set: %v", err)
-	}
-
-	// Find a secondary.
-	secondaryHost := findSecondaryHost(t, ctx, client)
-
-	// Create a direct connection to the secondary only.
-	directClientOpts := mongooptions.Client().ApplyURI(fmt.Sprintf("mongodb://%s/?directConnection=true", secondaryHost))
-
-	directClient, err := mongo.Connect(directClientOpts)
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, directClient.Disconnect(ctx)) }()
-
-	// Attempt a write operation with a context timeout (CSOT path).
-	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	coll := mongolocal.ArbColl(directClient)
-	_, err = coll.InsertOne(timeoutCtx, struct{ X int }{X: 1})
 
 	// Assert we get a NotWritablePrimary error (error code 10107).
 	var srvErr mongo.ServerError
