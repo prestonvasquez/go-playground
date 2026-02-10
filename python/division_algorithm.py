@@ -22,7 +22,7 @@ def lajos_solution(n):
     """Find all factors of a given positive integer n."""
     factors = set()
     # Iterate from 1 up to (the square root of n) + 1
-    for i in range(1, int(math.sqrt(n)) + 1):
+    for i in range(2, int(math.sqrt(n)) + 1):
         # % is "mod" and means "remainder after division"
         if n % i == 0:
             factors.add(i)
