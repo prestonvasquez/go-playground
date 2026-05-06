@@ -7,6 +7,7 @@ import (
 	"github.com/prestonvasquez/go-playground/mongolocal"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/event"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
@@ -42,4 +43,23 @@ func TestMutatingEventMonitoring(t *testing.T) {
 	t.Logf("Monitor called: %v, Mutated: %v", monitorCalled, mutated)
 
 	require.True(t, mutated, "expected mutated monitor to be used")
+}
+
+// The ConnString type has functions to validate auth/ssl/etc, but this
+// validation would not be done if ClientOptions were used instead of a URI.
+func TestMGD_MergeConnStringValidation_GODRIVER1714(t *testing.T) {
+	t.Run("with URI", func(t *testing.T) {
+		uri := "mongodb://localhost:27017/?authMechanism=SCRAM-SHA-1"
+		opts := options.Client().ApplyURI(uri)
+
+		_, err := mongo.Connect(opts)
+		require.ErrorContains(t, err, "username required")
+	})
+
+	t.Run("with ClientOptions", func(t *testing.T) {
+		opts := options.Client().SetAuth(options.Credential{AuthMechanism: "SCRAM-SHA-1"})
+
+		_, err := mongo.Connect(opts)
+		require.ErrorContains(t, err, "username required")
+	})
 }
