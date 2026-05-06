@@ -25,8 +25,8 @@ func TestMGD_AWS(t *testing.T) {
 	awsauth.Register()
 
 	clientOpts := options.Client().
-		ApplyURI(uri)
-		// SetAuth(options.Credential{AuthMechanism: "MONGODB-AWS"})
+		ApplyURI(uri).
+		SetAuth(options.Credential{AuthMechanism: "MONGODB-AWS"})
 
 	client, err := mongo.Connect(clientOpts)
 	require.NoError(t, err, "connect")
