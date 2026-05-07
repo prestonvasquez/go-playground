@@ -8,7 +8,10 @@ package goplayground
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver"
 )
 
 // TestMGD_Backpressure_RetriesOnOverload illustrates GODRIVER-3658 / 3844:
@@ -95,6 +99,105 @@ func TestMGD_Backpressure_MaxAdaptiveRetriesGoverns(t *testing.T) {
 
 	starts := mon.CommandStartedEvents()
 	require.Len(t, starts, 2, "expected 1 original find + 1 retry, got %d", len(starts))
+}
+
+// switchableDialer delegates to a real net.Dialer until failing is set,
+// then returns the injected error for every subsequent call. The flag
+// lets the test let setup (mongolocal startup, Ping-readiness loop, the
+// initial heartbeat) succeed before forcing the operation-side dial to
+// fail.
+type switchableDialer struct {
+	real     net.Dialer
+	failing  atomic.Bool
+	n        atomic.Int32
+	injected error
+}
+
+func (d *switchableDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.n.Add(1)
+	if d.failing.Load() {
+		return nil, d.injected
+	}
+	return d.real.DialContext(ctx, network, addr)
+}
+
+// TestMGD_Backpressure_TLSProtocolErrorMustNotBeLabeled asserts the
+// CMAP contract that non-I/O TLS errors MUST NOT carry backpressure
+// labels:
+//
+//	"For errors that the driver can distinguish as never occurring
+//	 due to server overload, such as DNS lookup failures, non-I/O TLS
+//	 errors (e.g., certificate validation or hostname-mismatch
+//	 failures), or errors encountered while establishing a connection
+//	 to a SOCKS5 proxy, the driver MUST NOT add backpressure error
+//	 labels for these error types."
+//
+// The "e.g." opens the "non-I/O TLS errors" category beyond cert
+// validation. Protocol-level TLS errors like tls.RecordHeaderError
+// (peer sent something that isn't TLS) and tls.AlertError (peer sent
+// a fatal alert) are also non-I/O TLS errors and must be excluded.
+//
+// Today the Go driver's deny-list in topology.wrapConnectionError
+// (added in GODRIVER-3646) catches only specific x509 cert types and
+// labels everything else — including tls.RecordHeaderError — with
+// SystemOverloadedError + RetryableError + NetworkError. This test
+// therefore FAILS today, demonstrating the bug. After the deny-list
+// is extended to exclude tls.RecordHeaderError and tls.AlertError,
+// the test will pass and serve as a regression guard.
+//
+// The test injects a tls.RecordHeaderError at the dialer layer for
+// the operation's pool-checkout dial (after the heartbeat has
+// succeeded and the server is selectable). The injected error flows
+// through wrapConnectionError; the resulting label is observable on
+// the driver.Error in the user-visible error chain.
+func TestMGD_Backpressure_TLSProtocolErrorMustNotBeLabeled(t *testing.T) {
+	dialer := &switchableDialer{
+		injected: tls.RecordHeaderError{Msg: "test-injected non-I/O TLS error"},
+	}
+
+	clientOpts := options.Client().
+		SetDialer(dialer).
+		SetMaxConnIdleTime(1 * time.Millisecond). // expire pool conns aggressively
+		SetRetryReads(false).                     // avoid retries that would mask the bug
+		SetRetryWrites(false)
+
+	client, teardown := mongolocal.New(t, context.Background(),
+		mongolocal.WithEnableTestCommands(),
+		mongolocal.WithMongoClientOptions(clientOpts))
+	defer teardown(t)
+
+	// Setup is done; flip the dialer into failure mode. Subsequent dials
+	// (which the next operation will trigger when it pulls a fresh pool
+	// connection) get the injected tls.RecordHeaderError.
+	t.Logf("dials during setup: %d", dialer.n.Load())
+	dialer.failing.Store(true)
+
+	// Wait long enough for any pooled connection from setup to be considered
+	// stale. The pool's checkout will discard stale conns and dial a new one.
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pingErr := client.Database("admin").RunCommand(ctx, bson.D{{"ping", 1}}).Err()
+	require.Error(t, pingErr, "expected ping to fail; dialer should have rejected new conn")
+
+	t.Logf("dialer call count: %d", dialer.n.Load())
+	t.Logf("ping error chain:")
+	for cur := pingErr; cur != nil; cur = errors.Unwrap(cur) {
+		t.Logf("  %T: %v", cur, cur)
+	}
+
+	var de driver.Error
+	require.True(t, errors.As(pingErr, &de),
+		"expected driver.Error in chain; got %v", pingErr)
+
+	// Spec contract: a non-I/O TLS error must NOT be labeled
+	// SystemOverloadedError. This assertion fails today (proving the
+	// bug) and will pass once wrapConnectionError's deny-list is
+	// extended to exclude tls.RecordHeaderError / tls.AlertError.
+	require.False(t, de.HasErrorLabel(driver.ErrSystemOverloadedError),
+		"non-I/O TLS error must not carry SystemOverloadedError label per CMAP; got labels=%v",
+		de.Labels)
 }
 
 // TestMGD_Backpressure_OverloadRetargetingDeprioritizes demonstrates that
