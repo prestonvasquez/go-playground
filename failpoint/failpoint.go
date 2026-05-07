@@ -212,6 +212,30 @@ func NewAlwaysOnErr(cmdName string, errCode int32) FailPoint {
 	return NewAlwaysOnErrWithLabels(cmdName, errCode, nil)
 }
 
+// Backpressure-related fixtures from the client-backpressure spec
+// (https://github.com/mongodb/specifications/blob/master/source/client-backpressure/client-backpressure.md).
+const (
+	OverloadErrorCode     int32 = 462
+	SystemOverloadedLabel       = "SystemOverloadedError"
+	RetryableErrorLabel         = "RetryableError"
+)
+
+// NewOverloadErr creates a FailPoint that will cause the specified command to
+// fail `times` times with the spec's overload error: code 462 carrying the
+// SystemOverloadedError + RetryableError labels.
+func NewOverloadErr(cmdName string, times int32) FailPoint {
+	labels := []string{SystemOverloadedLabel, RetryableErrorLabel}
+	return FailPoint{
+		ConfigureFailPoint: "failCommand",
+		Mode:               Mode{Times: times},
+		Data: Data{
+			FailCommands: []string{cmdName},
+			ErrorCode:    OverloadErrorCode,
+			ErrorLabels:  &labels,
+		},
+	}
+}
+
 // NewSingleBlock creates a FailPoint that will cause the specified command to
 // block once for the given number of milliseconds.
 func NewSingleBlock(cmdName string, blockTimeMS int32) FailPoint {
