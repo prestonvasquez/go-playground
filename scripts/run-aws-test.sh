@@ -61,5 +61,5 @@ for kv in parse_qs(u.query).get("authMechanismProperties", [""])[0].split(","):
         print(f"export AWS_SESSION_TOKEN={shlex.quote(kv.split(':', 1)[1])}")
 PY
 )"
-  go test -run '^TestMGD_AWS$' -v -count=1 .
+  go test -run '^(TestMGD_AWS|TestMGD_V1_AWS_STSCredentials_ExpireWithoutClientRecreation)$' -v -count=1 -timeout 120s .
 )
