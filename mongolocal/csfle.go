@@ -13,6 +13,27 @@ import (
 // localKMSKeyLen is the master-key length the "local" KMS provider requires.
 const localKMSKeyLen = 96
 
+// WithBypassAutoEncryption sets AutoEncryptionOptions.BypassAutoEncryption.
+// Default is true: the driver does not try to spawn mongocryptd on client
+// creation and writes go through the normal (non-encrypted) wire path. Set
+// to false to exercise the real auto-encryption write path — requires
+// mongocryptd in PATH or crypt_shared configured via WithCryptSharedLibPath.
+func WithBypassAutoEncryption(bypass bool) Option {
+	return func(o *options) {
+		o.bypassAutoEncryption = &bypass
+	}
+}
+
+// WithCryptSharedLibPath sets cryptSharedLibPath in AutoEncryptionOptions
+// ExtraOptions so the driver loads MongoDB's crypt_shared library at the
+// given path instead of spawning mongocryptd. crypt_shared is the .dylib /
+// .so available from MongoDB Enterprise downloads.
+func WithCryptSharedLibPath(path string) Option {
+	return func(o *options) {
+		o.cryptSharedLibPath = path
+	}
+}
+
 // NewCSFLE is mongolocal.New with CSFLE pre-wired: it spins up a sibling
 // MongoDB container, generates an ephemeral 96-byte master key for the
 // "local" KMS provider, returns a v2 mongo.Client whose
@@ -25,9 +46,9 @@ const localKMSKeyLen = 96
 // at runtime — callers of NewCSFLE are expected to opt in.
 //
 // Defaults BypassAutoEncryption(true) so the driver doesn't try to spawn
-// mongocryptd on client creation. Cases that need real auto-encryption
-// should override the auto-encryption options after calling NewCSFLE, or
-// install mongocryptd / crypt_shared and override BypassAutoEncryption.
+// mongocryptd on client creation. Cases that need the real auto-encryption
+// write path (which reaches AppendBatchArray in the driver) should pass
+// WithBypassAutoEncryption(false) together with WithCryptSharedLibPath.
 func NewCSFLE(t *testing.T, ctx context.Context, optionFuncs ...Option) (
 	*mongo.Client, *mongo.ClientEncryption, TeardownFunc,
 ) {
@@ -47,10 +68,21 @@ func NewCSFLE(t *testing.T, ctx context.Context, optionFuncs ...Option) (
 	}
 	const keyVaultNS = "encryption.__keyVault"
 
+	bypass := true
+	if opts.bypassAutoEncryption != nil {
+		bypass = *opts.bypassAutoEncryption
+	}
+
 	autoEnc := mongooptions.AutoEncryption().
 		SetKmsProviders(kmsProviders).
 		SetKeyVaultNamespace(keyVaultNS).
-		SetBypassAutoEncryption(true)
+		SetBypassAutoEncryption(bypass)
+
+	if opts.cryptSharedLibPath != "" {
+		autoEnc.SetExtraOptions(map[string]any{
+			"cryptSharedLibPath": opts.cryptSharedLibPath,
+		})
+	}
 
 	clientOpts := opts.mongoClientOpts
 	if clientOpts == nil {

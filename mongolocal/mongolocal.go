@@ -36,12 +36,14 @@ const (
 type TeardownFunc func(t *testing.T)
 
 type options struct {
-	mongoClientOpts    *mongooptions.ClientOptions
-	mongoClientOptsV1  *mongooptionsv1.ClientOptions
-	image              string
-	enableTestCommands bool
-	replSetName        string
-	oidcConfig         *OIDCConfig
+	mongoClientOpts      *mongooptions.ClientOptions
+	mongoClientOptsV1    *mongooptionsv1.ClientOptions
+	image                string
+	enableTestCommands   bool
+	replSetName          string
+	oidcConfig           *OIDCConfig
+	bypassAutoEncryption *bool  // nil = default (true)
+	cryptSharedLibPath   string // crypt_shared library path for auto-encryption
 }
 
 // OIDCConfig configures OIDC authentication for the MongoDB container.
