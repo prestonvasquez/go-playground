@@ -69,3 +69,46 @@ func TestMGD_ChangeStream_Resume(t *testing.T) {
 
 	assert.False(t, ok) // but it doesn't due to https://jira.mongodb.org/browse/GODRIVER-3380
 }
+
+// At the wire layer, we expect the aggregate op to return something like this:
+//
+// {cursor:{id:CID, firstBatch:[...]}}
+//
+// Bundling saves a round trip in the common case, like all cursor commands. In
+// cases where you are resuming a change stream, this would be the first [up to]
+// N (batch size) changes that happen since the resume token.
+//
+// In practice, a non-resuming change stream would result in an empty firstBatch
+// since nothing has happened since the start time. [There are caveats to this,
+// such as very carefully ordered concurrent operations].
+//
+// So the first TryNext is just reading that first empty batch from the
+// aggregate run in Watch().
+func TestMGD_ChangeStream_FirstTryNextDoesNotRoundTrip(t *testing.T) {
+	monitor := monitor.New(t, true, "getMore")
+	opts := options.Client().SetMonitor(monitor.CommandMonitor)
+
+	client, teardown := mongolocal.StartT(t, context.Background(),
+		mongolocal.WithEnableTestCommands(),
+		mongolocal.WithMongoClientOptions(opts),
+		mongolocal.WithReplicaSet("rs"),
+	)
+
+	defer teardown(t)
+
+	coll := mongolocal.ArbColl(client)
+	csOpts := options.ChangeStream().SetBatchSize(1)
+
+	cs, err := coll.Watch(context.Background(), mongo.Pipeline{}, csOpts)
+	require.NoError(t, err)
+
+	defer cs.Close(context.Background())
+
+	// Insert one document to ensure the change stream is open and has a resume
+	// token.
+	_, err = coll.InsertOne(context.Background(), bson.D{})
+	require.NoError(t, err)
+
+	ok := cs.TryNext(context.Background())
+	require.False(t, ok)
+}
