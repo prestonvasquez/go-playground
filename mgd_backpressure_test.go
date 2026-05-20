@@ -40,7 +40,7 @@ func TestMGD_Backpressure_RetriesOnOverload(t *testing.T) {
 
 	clientOpts := options.Client().SetMonitor(mon.CommandMonitor)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(clientOpts))
@@ -79,7 +79,7 @@ func TestMGD_Backpressure_MaxAdaptiveRetriesGoverns(t *testing.T) {
 		SetMonitor(mon.CommandMonitor).
 		SetMaxAdaptiveRetries(1)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(clientOpts))
@@ -161,7 +161,7 @@ func TestMGD_Backpressure_TLSProtocolErrorMustNotBeLabeled(t *testing.T) {
 		SetRetryReads(false).                     // avoid retries that would mask the bug
 		SetRetryWrites(false)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(clientOpts))
 	defer teardown(t)

@@ -19,7 +19,7 @@ func TestMGD_ChangeStream_Resume(t *testing.T) {
 	monitor := monitor.New(t, true, "getMore")
 	opts := options.Client().SetMonitor(monitor.CommandMonitor)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(opts),
 		mongolocal.WithReplicaSet("rs"),

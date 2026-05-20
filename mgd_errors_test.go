@@ -21,7 +21,7 @@ func TestMGDErrorsAsFromCommandFailedEvent(t *testing.T) {
 	monitor := mongoevent.NewCommandMonitor()
 	opts := options.Client().SetMonitor(mongoevent.NewCommandEventMonitor(monitor))
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(opts))
 

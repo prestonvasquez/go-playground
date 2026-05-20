@@ -92,7 +92,7 @@ func NewCSFLE(t *testing.T, ctx context.Context, optionFuncs ...Option) (
 
 	combined := append(append([]Option{}, optionFuncs...), WithMongoClientOptions(clientOpts))
 
-	client, teardown := New(t, ctx, combined...)
+	client, teardown := StartT(t, ctx, combined...)
 
 	ce, err := mongo.NewClientEncryption(client, mongooptions.ClientEncryption().
 		SetKmsProviders(kmsProviders).

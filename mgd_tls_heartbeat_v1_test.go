@@ -21,7 +21,7 @@ func TestMGD_TLSHeartbeatV1WithMongoLocal(t *testing.T) {
 	ctx := context.Background()
 
 	// Start MongoDB container using mongolocal
-	_, teardown := mongolocal.New(t, ctx, mongolocal.WithImage("mongo:6.0"))
+	_, teardown := mongolocal.StartT(t, ctx, mongolocal.WithImage("mongo:6.0"))
 	defer teardown(t)
 
 	// We'll manually construct connection strings to test with v1 driver
@@ -114,7 +114,7 @@ func TestMGD_TLSHeartbeatRetryTiming(t *testing.T) {
 	ctx := context.Background()
 
 	// Start MongoDB container
-	_, teardown := mongolocal.New(t, ctx, mongolocal.WithImage("mongo:6.0"))
+	_, teardown := mongolocal.StartT(t, ctx, mongolocal.WithImage("mongo:6.0"))
 	defer teardown(t)
 
 	endpoint := "localhost:27017"

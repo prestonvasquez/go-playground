@@ -33,7 +33,7 @@ func TestMGD_OIDC(t *testing.T) {
 	})
 
 	// Start MongoDB with OIDC enabled and connect using OIDC auth.
-	client, teardown := mongolocal.New(t, ctx,
+	client, teardown := mongolocal.StartT(t, ctx,
 		mongolocal.WithOIDC(&mongolocal.OIDCConfig{}),
 		mongolocal.WithMongoClientOptions(clientOpts))
 	defer teardown(t)

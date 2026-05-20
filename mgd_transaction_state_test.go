@@ -12,7 +12,7 @@ import (
 )
 
 func TestMGD_SessionContextHandlesTransactionAutomatically(t *testing.T) {
-	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithReplicaSet("rs0"))
+	client, teardown := mongolocal.StartT(t, context.Background(), mongolocal.WithReplicaSet("rs0"))
 	defer teardown(t)
 
 	coll := mongolocal.ArbColl(client)
@@ -62,7 +62,7 @@ func TestMGD_SessionContextHandlesTransactionAutomatically(t *testing.T) {
 // TestMGD_RequireExistingTransaction shows how to require an existing
 // transaction using the current API (workaround for IsTransactionRunning).
 func TestMGD_RequireExistingTransaction(t *testing.T) {
-	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithReplicaSet("rs0"))
+	client, teardown := mongolocal.StartT(t, context.Background(), mongolocal.WithReplicaSet("rs0"))
 	defer teardown(t)
 
 	coll := mongolocal.ArbColl(client)

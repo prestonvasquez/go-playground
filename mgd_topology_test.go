@@ -29,7 +29,7 @@ func TestMGDLatestTopologyDescription(t *testing.T) {
 		// server.
 		SetMinPoolSize(minPoolSize)
 
-	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithMongoClientOptions(opts))
+	client, teardown := mongolocal.StartT(t, context.Background(), mongolocal.WithMongoClientOptions(opts))
 	defer teardown(t)
 
 	require.NoError(t, client.Ping(context.Background(), nil))

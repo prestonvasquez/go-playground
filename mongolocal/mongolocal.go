@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -44,6 +46,13 @@ type options struct {
 	oidcConfig           *OIDCConfig
 	bypassAutoEncryption *bool  // nil = default (true)
 	cryptSharedLibPath   string // crypt_shared library path for auto-encryption
+	hostPort             int    // 0 = let testcontainers pick a free port
+	containerName        string // empty = let testcontainers generate one
+
+	// extraContainerOpts is populated internally for cases (like OIDC) where
+	// callers need to inject testcontainers customizers that depend on
+	// *testing.T-only setup steps. Not exposed via a public Option.
+	extraContainerOpts []testcontainers.ContainerCustomizer
 }
 
 // OIDCConfig configures OIDC authentication for the MongoDB container.
@@ -144,6 +153,22 @@ func WithReplicaSet(replSetName string) Option {
 	}
 }
 
+// WithHostPort pins the container's 27017/tcp to a fixed host port. If 0
+// (the default), testcontainers picks a random free port.
+func WithHostPort(port int) Option {
+	return func(o *options) {
+		o.hostPort = port
+	}
+}
+
+// WithContainerName sets a fixed container name. If unset, testcontainers
+// generates one.
+func WithContainerName(name string) Option {
+	return func(o *options) {
+		o.containerName = name
+	}
+}
+
 // WithOIDC enables OIDC authentication on the MongoDB container.
 // This will:
 //   - Fetch OIDC secrets from AWS Secrets Manager
@@ -175,7 +200,132 @@ func (e *Env) ConnectionString() string {
 	return e.connString
 }
 
-func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
+// startContainer is the testless core: it applies the given options, starts a
+// mongo container via testcontainers, and returns the container along with a
+// usable connection string. The caller is responsible for terminating the
+// container on error after it is returned successfully (errors during this
+// function tear down anything that was started).
+//
+// OIDC is not supported here because OIDC setup currently requires *testing.T;
+// use New / NewWithEnv for tests that need OIDC.
+func startContainer(ctx context.Context, opts *options) (*mongodb.MongoDBContainer, string, error) {
+	var containerOpts []testcontainers.ContainerCustomizer
+
+	if needsCustomWaitStrategy(opts.image) {
+		waitStrategy := wait.ForAll(
+			wait.ForLog("(?i)waiting for connections").AsRegexp().WithOccurrence(1),
+			wait.ForListeningPort("27017/tcp"),
+		)
+		containerOpts = append(containerOpts, testcontainers.WithWaitStrategy(waitStrategy))
+	}
+
+	if opts.enableTestCommands {
+		containerOpts = append(containerOpts,
+			testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
+	}
+
+	if opts.replSetName != "" {
+		containerOpts = append(containerOpts, mongodb.WithReplicaSet(opts.replSetName))
+	}
+
+	if opts.hostPort != 0 || opts.containerName != "" {
+		req := testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Name: opts.containerName,
+			},
+		}
+		if opts.hostPort != 0 {
+			req.HostConfigModifier = func(hc *container.HostConfig) {
+				hc.PortBindings = nat.PortMap{
+					"27017/tcp": []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: strconv.Itoa(opts.hostPort)}},
+				}
+			}
+		}
+		containerOpts = append(containerOpts, testcontainers.CustomizeRequest(req))
+	}
+
+	containerOpts = append(containerOpts, opts.extraContainerOpts...)
+
+	c, err := mongodb.Run(ctx, opts.image, containerOpts...)
+	if err != nil {
+		return nil, "", fmt.Errorf("start mongo container: %w", err)
+	}
+
+	connString, err := c.ConnectionString(ctx)
+	if err != nil {
+		_ = testcontainers.TerminateContainer(c)
+		return nil, "", fmt.Errorf("connection string: %w", err)
+	}
+
+	if opts.replSetName != "" {
+		host, err := c.Host(ctx)
+		if err != nil {
+			_ = testcontainers.TerminateContainer(c)
+			return nil, "", fmt.Errorf("container host: %w", err)
+		}
+		port, err := c.MappedPort(ctx, "27017")
+		if err != nil {
+			_ = testcontainers.TerminateContainer(c)
+			return nil, "", fmt.Errorf("mapped port: %w", err)
+		}
+
+		if opts.hostPort != 0 {
+			// Fixed host port: rewrite the replset member to a host-routable
+			// address so SDAM works without directConnection=true. (The default
+			// module initiates with the container's internal Docker IP.)
+			memberHost := fmt.Sprintf("127.0.0.1:%d", opts.hostPort)
+			reconfig := fmt.Sprintf(
+				`cfg = rs.conf(); cfg.members[0].host = %q; rs.reconfig(cfg, {force: true})`,
+				memberHost,
+			)
+			if rc, _, execErr := c.Exec(ctx, []string{"mongo", "--quiet", "--eval", reconfig}); execErr != nil || rc != 0 {
+				_ = testcontainers.TerminateContainer(c)
+				return nil, "", fmt.Errorf("rs.reconfig: rc=%d err=%v", rc, execErr)
+			}
+			waitPrimary := `for (var i=0;i<60;i++) { try { if (db.hello().isWritablePrimary) quit(0); } catch (e) {} sleep(500); } quit(1)`
+			if rc, _, execErr := c.Exec(ctx, []string{"mongo", "--quiet", "--eval", waitPrimary}); execErr != nil || rc != 0 {
+				_ = testcontainers.TerminateContainer(c)
+				return nil, "", fmt.Errorf("primary not ready after reconfig: rc=%d err=%v", rc, execErr)
+			}
+			connString = fmt.Sprintf("mongodb://localhost:%d/?replicaSet=%s", opts.hostPort, opts.replSetName)
+		} else {
+			// Random host port: SDAM can't reach the container IP from the host,
+			// so bypass replset discovery with directConnection=true.
+			connString = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, port.Port())
+		}
+	}
+
+	return c, connString, nil
+}
+
+// Cleanup tears down resources started by Start. It is safe to call from a
+// defer that fires when the program receives SIGINT/SIGTERM.
+type Cleanup func() error
+
+// Start spins up a mongo container using the same options as New, but without
+// requiring *testing.T. Intended for long-running dev scripts (CLI helpers,
+// docker-compose replacements) where the caller blocks on a signal and the
+// container is torn down by a deferred Cleanup.
+//
+// OIDC is not supported via Start; use New / NewWithEnv for that.
+func Start(ctx context.Context, optionFuncs ...Option) (*Env, Cleanup, error) {
+	opts := &options{image: "mongo:latest"}
+	for _, apply := range optionFuncs {
+		apply(opts)
+	}
+
+	c, connString, err := startContainer(ctx, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cleanup := Cleanup(func() error {
+		return testcontainers.TerminateContainer(c)
+	})
+	return &Env{connString: connString}, cleanup, nil
+}
+
+func startContainerT(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 	t.Helper()
 
 	opts := &options{
@@ -203,51 +353,30 @@ func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 		opts.image = "mongodb/mongodb-enterprise-server:latest"
 	}
 
-	// Handle OIDC setup if enabled.
+	// Handle OIDC setup if enabled. OIDC must run before startContainer so its
+	// --setParameter args can be appended to the container command via
+	// opts.extraContainerOpts.
 	var oidcArtifacts *OIDCArtifacts
-	var oidcProviders string
 	if opts.oidcConfig != nil {
-		oidcArtifacts, oidcProviders = setupOIDC(t, opts.oidcConfig)
-	}
-
-	// MongoDB 4.x and earlier use lowercase "waiting for connections"
-	// Only override the default wait strategy for these older versions
-	var containerOpts []testcontainers.ContainerCustomizer
-	if needsCustomWaitStrategy(opts.image) {
-		waitStrategy := wait.ForAll(
-			wait.ForLog("(?i)waiting for connections").AsRegexp().WithOccurrence(1),
-			wait.ForListeningPort("27017/tcp"),
-		)
-		containerOpts = append(containerOpts, testcontainers.WithWaitStrategy(waitStrategy))
-	}
-
-	// Enable test commands if requested
-	if opts.enableTestCommands {
-		t.Log("Enabling test commands in mongod")
-
-		containerOpts = append(containerOpts,
-			testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
-	}
-
-	// Enable OIDC if configured.
-	if opts.oidcConfig != nil {
+		artifacts, providers := setupOIDC(t, opts.oidcConfig)
+		oidcArtifacts = artifacts
 		t.Log("Enabling OIDC authentication in mongod")
 
-		containerOpts = append(containerOpts,
+		opts.extraContainerOpts = append(opts.extraContainerOpts,
 			testcontainers.WithCmdArgs(
 				"--setParameter", "authenticationMechanisms=SCRAM-SHA-1,SCRAM-SHA-256,MONGODB-OIDC",
-				"--setParameter", "oidcIdentityProviders="+oidcProviders,
+				"--setParameter", "oidcIdentityProviders="+providers,
 			))
 	}
 
+	if opts.enableTestCommands {
+		t.Log("Enabling test commands in mongod")
+	}
 	if opts.replSetName != "" {
 		t.Logf("Configuring replica set with name %s", opts.replSetName)
-
-		containerOpts = append(containerOpts,
-			mongodb.WithReplicaSet(opts.replSetName))
 	}
 
-	mongolocalContainer, err := mongodb.Run(ctx, opts.image, containerOpts...)
+	mongolocalContainer, connString, err := startContainer(ctx, opts)
 	require.NoError(t, err, "failed to start mongolocal container")
 
 	tdFunc := func(t *testing.T) {
@@ -255,24 +384,6 @@ func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 
 		require.NoError(t, testcontainers.TerminateContainer(mongolocalContainer),
 			"failed to terminate mongolocal container")
-	}
-
-	connString, err := mongolocalContainer.ConnectionString(ctx)
-	if err != nil {
-		tdFunc(t)
-		t.Fatalf("failed to get connection string: %s", err)
-	}
-
-	if opts.replSetName != "" {
-		// This is a bug in testcontainers-go where the replica set name is not
-		// included. No idea why it matters.
-		host, err := mongolocalContainer.Host(ctx)
-		require.NoError(t, err, "failed to get container host")
-
-		port, err := mongolocalContainer.MappedPort(ctx, "27017")
-		require.NoError(t, err, "failed to get mapped port")
-
-		connString = fmt.Sprintf("mongodb://%s:%s/?directConnection=true", host, port.Port())
 	}
 
 	// Populate OIDC artifacts if enabled.
@@ -348,28 +459,28 @@ func new(t *testing.T, ctx context.Context, optionFuncs ...Option) *newResult {
 	return result
 }
 
-// New creates a new MongoDB test container and returns a connected mongo.Client
+// StartT creates a new MongoDB test container and returns a connected mongo.Client
 // and a TeardownFunc to clean up resources.
-func New(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
-	result := new(t, ctx, optionFuncs...)
+func StartT(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc) {
+	result := startContainerT(t, ctx, optionFuncs...)
 
 	return result.clientV2, result.teardown
 }
 
-// NewWithEnv creates a new MongoDB test container and returns a connected
+// StartTWithEnv creates a new MongoDB test container and returns a connected
 // mongo.Client, a TeardownFunc, and an Env for accessing the underlying
 // test environment.
-func NewWithEnv(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc, *Env) {
-	result := new(t, ctx, optionFuncs...)
+func StartTWithEnv(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongo.Client, TeardownFunc, *Env) {
+	result := startContainerT(t, ctx, optionFuncs...)
 
 	env := &Env{connString: result.connString}
 
 	return result.clientV2, result.teardown, env
 }
 
-// NewV1 creates a new MongoDB test container and returns a connected v1
+// StartTV1 creates a new MongoDB test container and returns a connected v1
 // mongo.Client
-func NewV1(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongov1.Client, TeardownFunc) {
+func StartTV1(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongov1.Client, TeardownFunc) {
 	opts := &options{}
 	for _, apply := range optionFuncs {
 		apply(opts)
@@ -379,7 +490,7 @@ func NewV1(t *testing.T, ctx context.Context, optionFuncs ...Option) (*mongov1.C
 		optionFuncs = append(optionFuncs, WithMongoClientOptionsV1(mongooptionsv1.Client()))
 	}
 
-	result := new(t, ctx, optionFuncs...)
+	result := startContainerT(t, ctx, optionFuncs...)
 
 	return result.clientV1, result.teardown
 }

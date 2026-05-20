@@ -15,7 +15,7 @@ func TestMGD_ClientBulkWrite_DupeKeyErrorCodes(t *testing.T) {
 	// Inserting a duplicate _id via Client.BulkWrite should return a
 	// duplicate-key error whose codes are visible through mongo.ErrorCodes.
 
-	client, teardown := mongolocal.New(t, context.Background())
+	client, teardown := mongolocal.StartT(t, context.Background())
 	defer teardown(t)
 
 	coll := mongolocal.ArbColl(client)

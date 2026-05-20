@@ -25,7 +25,7 @@ import (
 func TestMGD_CSOT_ContextWithTimeout(t *testing.T) {
 	// Does SetTimeout have to be used for context deadlines to work?
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithEnableTestCommands())
 
 	defer teardown(t)
@@ -58,7 +58,7 @@ func TestMGD_CSOT_V1_ContextDeadlineWithoutSetTimeout(t *testing.T) {
 	// Ans. context will timeout without SetTimeout, but the background reader
 	// will not be activated unless SetTimeout is used.
 
-	client, teardown := mongolocal.NewV1(t, context.Background(),
+	client, teardown := mongolocal.StartTV1(t, context.Background(),
 		mongolocal.WithEnableTestCommands())
 
 	defer teardown(t)
@@ -92,7 +92,7 @@ func TestMGD_CSOT_V1_ContextDeadlineWithSetTimeout(t *testing.T) {
 
 	opts := optionsv1.Client().SetTimeout(0)
 
-	client, teardown := mongolocal.NewV1(t, context.Background(),
+	client, teardown := mongolocal.StartTV1(t, context.Background(),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptionsV1(opts))
 
@@ -133,7 +133,7 @@ func TestMGD_CSOT_WithTransaction_InheritTimeoutMS_ClientLevel(t *testing.T) {
 		SetTimeout(500 * time.Millisecond).
 		SetMinPoolSize(1)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithMongoClientOptions(opts),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands())
@@ -165,7 +165,7 @@ func TestMGD_CSOT_WithTransaction_InheritTimeoutMS_OperationLevel(t *testing.T) 
 	opts := mongooptions.Client().
 		SetMinPoolSize(1)
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithMongoClientOptions(opts),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands())
@@ -217,7 +217,7 @@ func TestMGD_CSOT_RetryableWrite_7a_AllWriteAttemptsMade(t *testing.T) {
 		},
 	}
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(options.Client().SetMonitor(monitor).SetRetryWrites(true)))
@@ -279,7 +279,7 @@ func TestMGD_CSOT_RetryableWrite_7b_NoWriteAttemptsMade(t *testing.T) {
 		},
 	}
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(options.Client().SetMonitor(monitor).SetRetryWrites(true)))
@@ -342,7 +342,7 @@ func TestMGD_CSOT_RetryableWrite_7c_MixedWriteAttempts(t *testing.T) {
 		},
 	}
 
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands(),
 		mongolocal.WithMongoClientOptions(options.Client().SetMonitor(monitor).SetRetryWrites(true)))
@@ -381,7 +381,7 @@ func TestMGD_CSOT_RetryableWrite_7c_MixedWriteAttempts(t *testing.T) {
 }
 
 func TestMGD_CSOT_Aggregate_MaxAwaitTimeMS_GreaterThan_TimeoutMS(t *testing.T) {
-	client, teardown := mongolocal.New(t, context.Background())
+	client, teardown := mongolocal.StartT(t, context.Background())
 	defer teardown(t)
 
 	db := client.Database("testdb")

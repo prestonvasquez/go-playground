@@ -25,7 +25,7 @@ func TestMGD_MarshalingWriteConcern(t *testing.T) {
 func TestMGD_RunCommandWithWCJournal(t *testing.T) {
 	// Does using journal in the write concern cause a server error?
 
-	client, teardown := mongolocal.New(t, context.Background())
+	client, teardown := mongolocal.StartT(t, context.Background())
 	defer teardown(t)
 
 	cmd := bson.D{

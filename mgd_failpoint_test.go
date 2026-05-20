@@ -14,7 +14,7 @@ import (
 )
 
 func TestMGD_Failpoint_Enable(t *testing.T) {
-	client, teardown := mongolocal.New(t, context.Background(),
+	client, teardown := mongolocal.StartT(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands())
 
@@ -35,7 +35,7 @@ func TestMGD_Failpoint_Enable(t *testing.T) {
 }
 
 func TestMGD_Failpoint_SetFromDifferentClients(t *testing.T) {
-	client1, teardown, env := mongolocal.NewWithEnv(t, context.Background(),
+	client1, teardown, env := mongolocal.StartTWithEnv(t, context.Background(),
 		mongolocal.WithReplicaSet("rs0"),
 		mongolocal.WithEnableTestCommands())
 

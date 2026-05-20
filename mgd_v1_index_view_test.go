@@ -15,7 +15,7 @@ import (
 )
 
 func Test_IndexView_DropAll_Async(t *testing.T) {
-	client, teardown := mongolocal.NewV1(t, context.Background())
+	client, teardown := mongolocal.StartTV1(t, context.Background())
 	defer teardown(t)
 
 	coll := mongolocal.ArbCollV1(client)

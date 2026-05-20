@@ -28,7 +28,7 @@ func TestMutatingEventMonitoring(t *testing.T) {
 
 	opts := options.Client().SetMonitor(monitor)
 
-	client, teardown := mongolocal.New(t, context.Background(), mongolocal.WithMongoClientOptions(opts))
+	client, teardown := mongolocal.StartT(t, context.Background(), mongolocal.WithMongoClientOptions(opts))
 	defer teardown(t)
 
 	// Mutate the monitor behavior by setting the function it delegates to.
