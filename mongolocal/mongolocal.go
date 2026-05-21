@@ -183,6 +183,44 @@ func WithOIDC(cfg *OIDCConfig) Option {
 	}
 }
 
+// WithTLS configures the MongoDB container to require TLS. caHostPath is a
+// PEM-encoded CA file the server uses to validate client certificates;
+// serverPemHostPath is a PEM bundle containing the server's certificate
+// followed by its unencrypted private key.
+//
+// Both files are mounted read-only into the container at fixed paths and
+// mongod is launched with the corresponding --tls* flags. The image's
+// docker-entrypoint.sh adds --bind_ip_all when no bind flag is provided, so
+// the listener is reachable through testcontainers' port mapping.
+//
+// Callers that need to connect must supply matching TLS material via
+// WithMongoClientOptions (e.g. options.Client().SetTLSConfig(...)); StartT
+// will pass the URI through and the driver will negotiate TLS during its
+// initial ping.
+func WithTLS(caHostPath, serverPemHostPath string) Option {
+	return func(o *options) {
+		o.extraContainerOpts = append(o.extraContainerOpts,
+			testcontainers.WithFiles(
+				testcontainers.ContainerFile{
+					HostFilePath:      caHostPath,
+					ContainerFilePath: "/etc/mongo-tls/ca.pem",
+					FileMode:          0o644,
+				},
+				testcontainers.ContainerFile{
+					HostFilePath:      serverPemHostPath,
+					ContainerFilePath: "/etc/mongo-tls/server.pem",
+					FileMode:          0o644,
+				},
+			),
+			testcontainers.WithCmdArgs(
+				"--tlsMode", "requireTLS",
+				"--tlsCAFile", "/etc/mongo-tls/ca.pem",
+				"--tlsCertificateKeyFile", "/etc/mongo-tls/server.pem",
+			),
+		)
+	}
+}
+
 type newResult struct {
 	clientV2   *mongo.Client
 	clientV1   *mongov1.Client
