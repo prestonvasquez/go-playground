@@ -14,6 +14,7 @@ func (c *trCursor) close() error {
 
 func TestRequire_Deref(t *testing.T) {
 	var tcr *trCursor
-	defer tcr.close()
-	require.True(t, true)
+	defer func() { require.NoError(t, tcr.close()) }()
+
+	require.Nil(t, tcr)
 }
