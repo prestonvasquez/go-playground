@@ -6,15 +6,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type trCursor struct{}
+type trCursor struct {
+	err error
+}
 
 func (c *trCursor) close() error {
-	return nil
+	return c.err
 }
 
 func TestRequire_Deref(t *testing.T) {
 	var tcr *trCursor
-	defer func() { require.NoError(t, tcr.close()) }()
+
+	if tcr != nil {
+		defer func() { require.NoError(t, tcr.close()) }()
+	}
 
 	require.Nil(t, tcr)
 }
