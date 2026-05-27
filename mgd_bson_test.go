@@ -158,3 +158,20 @@ func TestDecimal128_NonCanonicalValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, validateDecimal128(canonical), "canonical should pass")
 }
+
+// You can't decode into a map[string]any directly. You have to decode into a
+// container and then assign to the map. This is because the decoder needs
+// to asssign the address of the map value, but map values are not addressable
+// in Go.
+func TestMGD_BSON_UnmarshalDirectlyIntoMap(t *testing.T) {
+	m := map[string]any{"foo": 123123}
+
+	bytes, err := bson.MarshalExtJSON(m, true, false)
+	require.NoError(t, err)
+
+	mapOfMaps := map[string]map[string]any{}
+
+	// Map values are not addressable, so this fails:
+	err = bson.UnmarshalExtJSON(bytes, true, mapOfMaps["fooMap"])
+	require.Error(t, err)
+}

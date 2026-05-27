@@ -145,6 +145,19 @@ func needsCustomWaitStrategy(image string) bool {
 	return majorVersion <= 4
 }
 
+// mongoShell returns the shell binary name for the given image. The legacy
+// "mongo" shell was removed in MongoDB 6.0; use "mongosh" from 6.0 onwards.
+func mongoShell(image string) string {
+	re := regexp.MustCompile(`mongo:?(\d+)\.`)
+	matches := re.FindStringSubmatch(image)
+	if len(matches) >= 2 {
+		if major, err := strconv.Atoi(matches[1]); err == nil && major < 6 {
+			return "mongo"
+		}
+	}
+	return "mongosh"
+}
+
 // WithReplicaSet configures the MongoDB container to run as a replica set with
 // the given name.
 func WithReplicaSet(replSetName string) Option {
@@ -316,12 +329,13 @@ func startContainer(ctx context.Context, opts *options) (*mongodb.MongoDBContain
 				`cfg = rs.conf(); cfg.members[0].host = %q; rs.reconfig(cfg, {force: true})`,
 				memberHost,
 			)
-			if rc, _, execErr := c.Exec(ctx, []string{"mongo", "--quiet", "--eval", reconfig}); execErr != nil || rc != 0 {
+			shell := mongoShell(opts.image)
+			if rc, _, execErr := c.Exec(ctx, []string{shell, "--quiet", "--eval", reconfig}); execErr != nil || rc != 0 {
 				_ = testcontainers.TerminateContainer(c)
 				return nil, "", fmt.Errorf("rs.reconfig: rc=%d err=%v", rc, execErr)
 			}
 			waitPrimary := `for (var i=0;i<60;i++) { try { if (db.hello().isWritablePrimary) quit(0); } catch (e) {} sleep(500); } quit(1)`
-			if rc, _, execErr := c.Exec(ctx, []string{"mongo", "--quiet", "--eval", waitPrimary}); execErr != nil || rc != 0 {
+			if rc, _, execErr := c.Exec(ctx, []string{shell, "--quiet", "--eval", waitPrimary}); execErr != nil || rc != 0 {
 				_ = testcontainers.TerminateContainer(c)
 				return nil, "", fmt.Errorf("primary not ready after reconfig: rc=%d err=%v", rc, execErr)
 			}
