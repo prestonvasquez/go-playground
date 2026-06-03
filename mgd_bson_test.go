@@ -175,3 +175,187 @@ func TestMGD_BSON_UnmarshalDirectlyIntoMap(t *testing.T) {
 	err = bson.UnmarshalExtJSON(bytes, true, mapOfMaps["fooMap"])
 	require.Error(t, err)
 }
+
+// TestMGD_BSON_ZeroLengthString is the Go analog of js-bson issue #1
+// (onDemand.parseToElements non-terminating scan on zero-length string).
+//
+// In js-bson, findNull loops past the buffer end when a string element
+// declares size 0 because it lacks a `< bytes.length` bound. The Go-driver
+// analog is whether bsoncore detects size 0 before indexing string content.
+//
+// BSON strings carry an int32 size that includes the null terminator, so the
+// minimum valid size is 1. Size 0 means no bytes at all — not even a
+// terminator — and must be rejected rather than cause a panic.
+func TestMGD_BSON_ZeroLengthString(t *testing.T) {
+	// 12-byte document: outer length is consistent, string element size = 0.
+	//   0x0C 0x00 0x00 0x00  total length = 12
+	//   0x02                  element type: string
+	//   0x61 0x00             key: "a\x00"
+	//   0x00 0x00 0x00 0x00  string size = 0  (invalid; minimum is 1)
+	//   0x00                  document terminator
+	raw := bson.Raw{
+		0x0C, 0x00, 0x00, 0x00,
+		0x02,
+		0x61, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00,
+	}
+
+	t.Run("Validate", func(t *testing.T) {
+		var (
+			err       error
+			panicked  bool
+			recovered any
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					recovered = r
+				}
+			}()
+			err = raw.Validate()
+		}()
+		require.Falsef(t, panicked,
+			"bson.Raw.Validate panicked on zero-length string element: %v", recovered)
+		require.Error(t, err,
+			"bson.Raw.Validate should return an error for string size 0")
+	})
+
+	t.Run("Unmarshal", func(t *testing.T) {
+		var (
+			out       bson.M
+			err       error
+			panicked  bool
+			recovered any
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					recovered = r
+				}
+			}()
+			err = bson.Unmarshal(raw, &out)
+		}()
+		require.Falsef(t, panicked,
+			"bson.Unmarshal panicked on zero-length string element: %v", recovered)
+		require.Error(t, err,
+			"bson.Unmarshal should return an error for string size 0")
+	})
+}
+
+// TestMGD_BSON_ZeroLengthVectorBinary is the Go analog of js-bson issue #2
+// (validateBinaryVector allows a zero-length subtype-9 Binary to serialize).
+//
+// BSON Binary subtype 9 (Vector) requires at least 2 metadata bytes:
+// byte 0 = dtype (element type of the vector), byte 1 = padding count.
+// A zero-length payload has neither, producing a semantically invalid vector.
+//
+// In js-bson, validateBinaryVector reads buffer[0]/buffer[1] without a
+// length guard, both return undefined, every dtype branch is skipped, and
+// validation passes silently. The Go driver does not define Vector-specific
+// constructor helpers, so this test probes whether Validate/Unmarshal treat
+// a structurally valid but semantically empty subtype-9 Binary as an error.
+func TestMGD_BSON_ZeroLengthVectorBinary(t *testing.T) {
+	// 13-byte document: Binary element, subtype 9 (Vector), zero data bytes.
+	//   0x0D 0x00 0x00 0x00  total length = 13
+	//   0x05                  element type: Binary
+	//   0x76 0x00             key: "v\x00"
+	//   0x00 0x00 0x00 0x00  binary data length = 0
+	//   0x09                  binary subtype = 9 (Vector)
+	//   0x00                  document terminator
+	raw := bson.Raw{
+		0x0D, 0x00, 0x00, 0x00,
+		0x05,
+		0x76, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x09,
+		0x00,
+	}
+
+	t.Run("Validate", func(t *testing.T) {
+		var (
+			err       error
+			panicked  bool
+			recovered any
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					recovered = r
+				}
+			}()
+			err = raw.Validate()
+		}()
+		require.Falsef(t, panicked,
+			"bson.Raw.Validate panicked on zero-length Vector Binary: %v", recovered)
+		// A zero-length Binary is structurally valid BSON; the Vector metadata
+		// constraint is semantic. The driver may or may not enforce it here.
+		t.Logf("Validate result for zero-length subtype-9 Binary: err=%v", err)
+	})
+
+	t.Run("Unmarshal", func(t *testing.T) {
+		var (
+			out       bson.M
+			err       error
+			panicked  bool
+			recovered any
+		)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					panicked = true
+					recovered = r
+				}
+			}()
+			err = bson.Unmarshal(raw, &out)
+		}()
+		require.Falsef(t, panicked,
+			"bson.Unmarshal panicked on zero-length Vector Binary: %v", recovered)
+		t.Logf("Unmarshal result for zero-length subtype-9 Binary: err=%v out=%+v", err, out)
+	})
+}
+
+func TestMGD_BSON_Validate_ZeroLength(t *testing.T) {
+	// Step 1: Construct a malformed raw BSON buffer whose first four bytes
+	// encode an int32 length of zero. This satisfies the minimum length to
+	// read the leading int32, but a valid BSON document must be at least 5
+	// bytes (4-byte length + trailing 0x00). A zero declared length should
+	// be rejected by a validator, not turned into a process panic.
+	raw := bson.Raw{0x00, 0x00, 0x00, 0x00}
+
+	// Step 2: Call Validate inside a deferred recover so the test can
+	// distinguish a panic (the bug) from a returned validation error (the
+	// correct behavior). Without the recover, the bug causes the test
+	// process to crash before any assertion can run.
+	var (
+		err       error
+		panicked  bool
+		recovered any
+	)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+				recovered = r
+			}
+		}()
+		err = raw.Validate()
+	}()
+
+	// Step 3: Assert that Validate did not panic. On the buggy driver this
+	// assertion fails because bsoncore.Document.Validate indexes d[length-1]
+	// with length == 0, producing a runtime index-out-of-range panic.
+	require.Falsef(t, panicked,
+		"bson.Raw.Validate panicked on malformed zero-length document: %v",
+		recovered)
+
+	// Step 4: Assert that Validate returned a non-nil error. A four-byte
+	// buffer with a declared length of zero is not a valid BSON document
+	// and must be reported as a validation error rather than silently
+	// accepted or crashing the process.
+	require.Error(t, err,
+		"bson.Raw.Validate should return an error for a zero-length document")
+}

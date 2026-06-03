@@ -1,3 +1,4 @@
 *.pid
 .claude
 
+cgo_lab/pkgconfig-wrapper/pkgconfig-wrapper

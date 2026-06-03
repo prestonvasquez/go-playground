@@ -1,0 +1,10 @@
+Name: mongocrypt
+Description: The libmongocrypt client-side field level encryption library.
+Version: 1.17.0
+Requires:
+Requires.private:
+prefix=/BROKEN/PATH
+includedir=${prefix}/include/mongocrypt
+libdir=${prefix}/lib
+Libs: -L${libdir} -lmongocrypt
+Cflags: -I${includedir}
