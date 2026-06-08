@@ -4,13 +4,25 @@
 package goplayground
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// kmsPlaceholderDoc is the canonical $$placeholder document used in unified
+// spec tests: { "$$placeholder": 1 }. A credential field set to this document
+// signals that the value should be substituted from an environment variable.
+var kmsPlaceholderDoc, _ = bson.Marshal(bson.D{{Key: "$$placeholder", Value: int32(1)}})
+
+func isKMSPlaceholder(v bson.RawValue) bool {
+	doc, ok := v.DocumentOK()
+	return ok && bytes.Equal([]byte(doc), kmsPlaceholderDoc)
+}
 
 func TestMGDAutoEncryptOpts(t *testing.T) {
 	// How can we create an idiomatic solution for decoding autoEncryptOpts from
@@ -18,7 +30,6 @@ func TestMGDAutoEncryptOpts(t *testing.T) {
 	//
 	// https://github.com/mongodb/specifications/blob/master/source/unified-test-format/unified-test-format.md#entity
 
-	// Set environment variables for $$placeholder substitution
 	t.Setenv("CSFLE_AWS_TEMP_ACCESS_KEY_ID", "tempAccessKeyIdValue")
 	t.Setenv("CSFLE_AWS_TEMP_SECRET_ACCESS_KEY", "tempSecretAccessKeyValue")
 	t.Setenv("CSFLE_AWS_TEMP_SESSION_TOKEN", "tempSessionTokenValue")
@@ -33,12 +44,33 @@ func TestMGDAutoEncryptOpts(t *testing.T) {
 	require.Equal(t, "tempSecretAccessKeyValue", ce.AutoEncryptOpts.KMSProviders.AWS.SecretAccessKey)
 	require.Equal(t, "tempSessionTokenValue", ce.AutoEncryptOpts.KMSProviders.AWS.SessionToken)
 
-	providers := getKMSPRoviders(t, &ce)
+	providers := getKMSProviders(t, &ce)
 
-	require.NotNil(t, providers["aws"])
-	require.Equal(t, "tempAccessKeyIdValue", providers["aws"]["accessKeyId"])
-	require.Equal(t, "tempSecretAccessKeyValue", providers["aws"]["secretAccessKey"])
-	require.Equal(t, "tempSessionTokenValue", providers["aws"]["sessionToken"])
+	require.NotNil(t, providers["aws:name1"])
+	require.Equal(t, "tempAccessKeyIdValue", providers["aws:name1"]["accessKeyId"])
+	require.Equal(t, "tempSecretAccessKeyValue", providers["aws:name1"]["secretAccessKey"])
+	require.Equal(t, "tempSessionTokenValue", providers["aws:name1"]["sessionToken"])
+}
+
+// TestMGDAutoEncryptOpts_NamedProvider confirms that the KMSProviders
+// UnmarshalBSON correctly routes any "[provider]:[name]" key to the right
+// typed provider struct via strings.Cut, preserving the full original key in
+// the output map.
+func TestMGDAutoEncryptOpts_NamedProvider(t *testing.T) {
+	t.Setenv("CSFLE_AWS_TEMP_ACCESS_KEY_ID", "tempAccessKeyIdValue")
+	t.Setenv("CSFLE_AWS_TEMP_SECRET_ACCESS_KEY", "tempSecretAccessKeyValue")
+	t.Setenv("CSFLE_AWS_TEMP_SESSION_TOKEN", "tempSessionTokenValue")
+
+	var ce clientEntity
+	require.NoError(t, bson.UnmarshalExtJSON(testJSONNamedProvider, false, &ce))
+
+	require.NotNil(t, ce.AutoEncryptOpts)
+	require.NotNil(t, ce.AutoEncryptOpts.KMSProviders.AWS)
+
+	providers := getKMSProviders(t, &ce)
+
+	require.NotNil(t, providers["aws:myname"])
+	require.Equal(t, "tempAccessKeyIdValue", providers["aws:myname"]["accessKeyId"])
 }
 
 type awsKMSProvider struct {
@@ -48,7 +80,27 @@ type awsKMSProvider struct {
 }
 
 type KMSProviders struct {
-	AWS *awsKMSProvider `bson:"aws"`
+	AWS    *awsKMSProvider
+	AWSKey string // original key, e.g. "aws" or "aws:name1"
+}
+
+func (kp *KMSProviders) UnmarshalBSON(data []byte) error {
+	elems, err := bson.Raw(data).Elements()
+	if err != nil {
+		return err
+	}
+	for _, elem := range elems {
+		base, _, _ := strings.Cut(elem.Key(), ":")
+		switch base {
+		case "aws":
+			kp.AWSKey = elem.Key()
+			kp.AWS = new(awsKMSProvider)
+			if err := bson.Unmarshal(elem.Value().Document(), kp.AWS); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type autoEncryptOpts struct {
@@ -67,54 +119,53 @@ type clientEntity struct {
 func (awskp *awsKMSProvider) UnmarshalBSON(data []byte) error {
 	raw := bson.Raw(data)
 
-	// Reject unknown fields
+	// Reject unknown fields.
 	allowed := map[string]struct{}{
 		"accessKeyId":     {},
 		"secretAccessKey": {},
 		"sessionToken":    {},
 	}
-
 	elems, err := raw.Elements()
 	if err != nil {
 		return err
 	}
-
 	for _, el := range elems {
 		if _, ok := allowed[el.Key()]; !ok {
 			return fmt.Errorf("invalid field %q in aws kms provider", el.Key())
 		}
 	}
 
-	// Decode into a temporary struct
-	type awsAlias awsKMSProvider
-	var tmp awsAlias
-	if err := bson.Unmarshal(data, &tmp); err != nil {
-		return err
-	}
-
-	// Apply placeholder logic
-
-	// Defaults (non-temp credentials)
+	// Defaults (non-temp credentials).
 	accessKeyEnv := "FLE_AWS_KEY"
 	secretKeyEnv := "FLE_AWS_SECRET"
 
-	// If sessionToken == "$$placeholder", switch to temp creds
-	if tmp.SessionToken == "$$placeholder" {
-		tmp.SessionToken = os.Getenv("CSFLE_AWS_TEMP_SESSION_TOKEN")
-		accessKeyEnv = "CSFLE_AWS_TEMP_ACCESS_KEY_ID"
-		secretKeyEnv = "CSFLE_AWS_TEMP_SECRET_ACCESS_KEY"
+	// Check sessionToken first: if it is the $$placeholder document, switch to
+	// temporary credential environment variables.
+	if v, err := raw.LookupErr("sessionToken"); err == nil {
+		if isKMSPlaceholder(v) {
+			awskp.SessionToken = os.Getenv("CSFLE_AWS_TEMP_SESSION_TOKEN")
+			accessKeyEnv = "CSFLE_AWS_TEMP_ACCESS_KEY_ID"
+			secretKeyEnv = "CSFLE_AWS_TEMP_SECRET_ACCESS_KEY"
+		} else if s, ok := v.StringValueOK(); ok {
+			awskp.SessionToken = s
+		}
 	}
 
-	// If fields are missing/empty, backfill from env
-	if tmp.AccessKeyID == "" {
-		tmp.AccessKeyID = os.Getenv(accessKeyEnv)
-	}
-	if tmp.SecretAccessKey == "" {
-		tmp.SecretAccessKey = os.Getenv(secretKeyEnv)
+	if v, err := raw.LookupErr("accessKeyId"); err == nil {
+		if isKMSPlaceholder(v) {
+			awskp.AccessKeyID = os.Getenv(accessKeyEnv)
+		} else if s, ok := v.StringValueOK(); ok {
+			awskp.AccessKeyID = s
+		}
 	}
 
-	// Assign back to the receiver
-	*awskp = awsKMSProvider(tmp)
+	if v, err := raw.LookupErr("secretAccessKey"); err == nil {
+		if isKMSPlaceholder(v) {
+			awskp.SecretAccessKey = os.Getenv(secretKeyEnv)
+		} else if s, ok := v.StringValueOK(); ok {
+			awskp.SecretAccessKey = s
+		}
+	}
 
 	return nil
 }
@@ -136,18 +187,28 @@ func mapify(t *testing.T, key string, v any) map[string]any {
 	return m
 }
 
-// Need some way to convert KMSProviders back into a map[string]map[string]any
-// to pass to SetKMSProviders.
-func getKMSPRoviders(t *testing.T, ce *clientEntity) map[string]map[string]any {
+// getKMSProviders converts KMSProviders into a map[string]map[string]any
+// suitable for passing to SetKmsProviders, preserving the original key
+// (including any "[provider]:[name]" suffix).
+func getKMSProviders(t *testing.T, ce *clientEntity) map[string]map[string]any {
 	t.Helper()
 
 	providers := make(map[string]map[string]any)
 
-	providers["aws"] = mapify(t, "aws", ce.AutoEncryptOpts.KMSProviders.AWS)
+	if kp := ce.AutoEncryptOpts.KMSProviders; kp.AWS != nil {
+		key := kp.AWSKey
+		if key == "" {
+			key = "aws"
+		}
+		providers[key] = mapify(t, key, kp.AWS)
+	}
 
 	return providers
 }
 
+// testJSON mirrors the autoEncryptOpts structure used in the unified spec
+// tests: named KMS provider keys ("aws:name1") and $$placeholder documents
+// ({ "$$placeholder": 1 }) for credentials to be substituted from env vars.
 var testJSON = []byte(`
 {
   "autoEncryptOpts": {
@@ -174,10 +235,24 @@ var testJSON = []byte(`
       }
     },
     "kmsProviders": {
-      "aws": {
-        "accessKeyId": "",
-        "secretAccessKey": "",
-        "sessionToken": "$$placeholder"
+      "aws:name1": {
+        "accessKeyId":     { "$$placeholder": 1 },
+        "secretAccessKey": { "$$placeholder": 1 },
+        "sessionToken":    { "$$placeholder": 1 }
+      }
+    }
+  }
+}`)
+
+var testJSONNamedProvider = []byte(`
+{
+  "autoEncryptOpts": {
+    "keyVaultNamespace": "keyvault.datakeys",
+    "kmsProviders": {
+      "aws:myname": {
+        "accessKeyId":     { "$$placeholder": 1 },
+        "secretAccessKey": { "$$placeholder": 1 },
+        "sessionToken":    { "$$placeholder": 1 }
       }
     }
   }
