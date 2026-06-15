@@ -14,8 +14,8 @@ import (
 // Use to run old server versions not supported by the OSs (Ubuntu 22.04 and
 // RHEL 8.0) that are not supported by drivers-evergreen-tools.
 func main() {
-	image := flag.String("image", "mongo:8.3", "MongoDB image to run")
-	name := flag.String("name", "mongo-rs-8.3", "Container name (also visible to docker ps)")
+	image := flag.String("image", "mongo:4.2", "MongoDB image to run")
+	name := flag.String("name", "mongo-rs-4.2", "Container name (also visible to docker ps)")
 	rs := flag.String("rs", "rs0", "Replica set name")
 	port := flag.Int("port", 27017, "Host port to bind container 27017 to")
 	flag.Parse()
