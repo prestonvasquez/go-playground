@@ -16,6 +16,7 @@ const (
 	EventConnectionCheckedOut
 	EventConnectionCheckedIn
 	EventConnectionClosed
+	EventPoolCleared
 )
 
 type RecordedEvent struct {
@@ -102,6 +103,14 @@ func New(t *testing.T, shouldLog bool, cmds ...string) *Monitor {
 				monitor.eventMu.Lock()
 				monitor.allEvents = append(monitor.allEvents, RecordedEvent{Type: EventConnectionClosed, Event: pe})
 				monitor.eventMu.Unlock()
+			case event.ConnectionPoolCleared:
+				if shouldLog {
+					t.Logf("pool cleared (interruptInUseConnections=%t): %+v\n", pe.Interruption, pe)
+				}
+
+				monitor.eventMu.Lock()
+				monitor.allEvents = append(monitor.allEvents, RecordedEvent{Type: EventPoolCleared, Event: pe})
+				monitor.eventMu.Unlock()
 			}
 		},
 	}
@@ -175,6 +184,21 @@ func (m *Monitor) ConnectionCheckedInEvents() []*event.PoolEvent {
 	var events []*event.PoolEvent
 	for _, e := range m.allEvents {
 		if e.Type == EventConnectionCheckedIn {
+			events = append(events, e.Event.(*event.PoolEvent))
+		}
+	}
+
+	return events
+}
+
+// PoolClearedEvents returns all pool cleared events in order.
+func (m *Monitor) PoolClearedEvents() []*event.PoolEvent {
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
+
+	var events []*event.PoolEvent
+	for _, e := range m.allEvents {
+		if e.Type == EventPoolCleared {
 			events = append(events, e.Event.(*event.PoolEvent))
 		}
 	}
