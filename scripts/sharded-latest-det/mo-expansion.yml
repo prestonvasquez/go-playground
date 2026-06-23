@@ -1,2 +1,2 @@
 CRYPT_SHARED_LIB_PATH: "/Users/preston.vasquez/Developer/drivers-evergreen-tools/mongo_crypt_v1.dylib"
-MONGODB_URI: "mongodb://localhost:27018,localhost:27017"
+MONGODB_URI: "mongodb://localhost:27017,localhost:27018"

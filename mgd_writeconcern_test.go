@@ -3,6 +3,7 @@ package goplayground
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/prestonvasquez/go-playground/mongolocal"
 	"github.com/stretchr/testify/require"
@@ -10,6 +11,30 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
+
+type AWSCredentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+	Source          string
+	CanExpire       bool
+	Expires         time.Time
+	AccountID       string
+}
+
+// Lives inside the awsauth package
+type AccessKeyIDGetter interface {
+	GetAccessKeyID() string
+}
+
+type SecretAccessKeyGetter interface {
+	GetSecretAccessKey() string
+}
+
+type AWSCredentialsProvider interface {
+	AccessKeyIDGetter
+	SecretAccessKeyGetter
+}
 
 func TestMGD_MarshalingWriteConcern(t *testing.T) {
 	// Can writeconcern.WriteConcern be marshaled into BSON?
