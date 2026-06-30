@@ -4,11 +4,11 @@ go 1.25.0
 
 require (
 	github.com/stretchr/testify v1.11.1
-	go.mongodb.org/mongo-driver/v2 v2.0.0-00010101000000-000000000000
+	go.mongodb.org/mongo-driver/v2 v2.5.0
 )
 
 // V2
-replace go.mongodb.org/mongo-driver/v2 => /Users/preston.vasquez/Developer/mongo-go-driver
+//replace go.mongodb.org/mongo-driver/v2 => /Users/preston.vasquez/Developer/mongo-go-driver
 
 // V1
 //replace go.mongodb.org/mongo-driver => /Users/preston.vasquez/Developer/mongo-go-driver-2

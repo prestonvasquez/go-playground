@@ -11,7 +11,9 @@ import (
 	"syscall"
 )
 
-const version = "latest"
+const (
+	version = "latest"
+)
 
 // Start a sharded cluster against the latest MongoDB version using
 // drivers-evergreen-tools, run it in the foreground, and tear it down on
@@ -32,6 +34,12 @@ func main() {
 	driversTools := os.Getenv("DRIVERS_TOOLS")
 	if driversTools == "" {
 		log.Fatal("DRIVERS_TOOLS is not set")
+	}
+
+	// Remove the .bin dir from driversTools
+	binDir := filepath.Join(driversTools, ".bin")
+	if err := os.RemoveAll(binDir); err != nil {
+		log.Fatalf("removing %s: %v", binDir, err)
 	}
 
 	// run-orchestration.sh writes the cluster URI and CSFLE crypt_shared path
