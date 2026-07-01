@@ -87,3 +87,61 @@ func TestMGD_CSOT_CreateChangeStreamOperationOverride(t *testing.T) {
 	_, ok := started[0].Command.Lookup("maxTimeMS").AsInt64OK()
 	assert.True(t, ok, "expected aggregate command to carry maxTimeMS")
 }
+
+// TestMGD_ChangeStreamOpenLatency_DefaultVsPastStart illustrates that the delay
+// behind the CSOT failure is the DEFAULT path, not an edge case: opening a
+// whole-cluster change stream with the default API (client.Watch, no start time)
+// on a sharded cluster blocks until the config server's cluster time advances
+// past the mongos cluster time (bounded by periodicNoopIntervalSecs). A past
+// startAtOperationTime avoids the wait. Both opens run back-to-back, so the only
+// variable is the start time.
+//
+//	MONGODB_URI=mongodb://localhost:27017 go test -run TestMGD_ChangeStreamOpenLatency_DefaultVsPastStart -v
+func TestMGD_ChangeStreamOpenLatency_DefaultVsPastStart(t *testing.T) {
+	ctx := context.Background()
+
+	uri := os.Getenv("MONGODB_URI")
+	require.NotEmpty(t, uri, "set MONGODB_URI to a sharded (mongos) deployment")
+
+	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+	require.NoError(t, err)
+	defer client.Disconnect(ctx)
+
+	var hello struct {
+		Msg string `bson:"msg"`
+	}
+	require.NoError(t, client.Database("admin").
+		RunCommand(ctx, bson.D{{Key: "hello", Value: 1}}).Decode(&hello))
+	if hello.Msg != "isdbgrid" {
+		t.Skipf("requires a sharded cluster (mongos); got msg=%q", hello.Msg)
+	}
+
+	// Capture a cluster time, then let it fall into the past.
+	raw, err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "ping", Value: 1}}).Raw()
+	require.NoError(t, err)
+	tt, ii := raw.Lookup("$clusterTime", "clusterTime").Timestamp()
+	past := bson.Timestamp{T: tt, I: ii}
+	time.Sleep(1 * time.Second)
+
+	// openMS times only the open: client.Watch runs the aggregate and returns the
+	// first (empty) batch; getMore is not issued until ChangeStream.Next.
+	openMS := func(opts *options.ChangeStreamOptionsBuilder) int64 {
+		start := time.Now()
+		cs, err := client.Watch(ctx, mongo.Pipeline{}, opts)
+		ms := time.Since(start).Milliseconds()
+		if err != nil {
+			t.Logf("watch error: %v", err)
+			return ms
+		}
+		_ = cs.Close(ctx)
+		return ms
+	}
+
+	t.Log("whole-cluster change stream open latency (default Watch vs past start time):")
+	for i := 0; i < 6; i++ {
+		noStart := openMS(options.ChangeStream())
+		pastStart := openMS(options.ChangeStream().SetStartAtOperationTime(&past))
+		t.Logf("#%d: noStart=%4dms   pastStart=%4dms", i, noStart, pastStart)
+		time.Sleep(250 * time.Millisecond)
+	}
+}

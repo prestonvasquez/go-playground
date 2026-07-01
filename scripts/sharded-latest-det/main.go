@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -63,6 +65,19 @@ func main() {
 		"TOPOLOGY=sharded_cluster",
 	)
 
+	// mongo-orchestration hardcodes periodicNoopIntervalSecs to 1 for every
+	// non-mongos node unless the orchestration config already sets it. Let the
+	// caller override that by generating a config with a custom value and
+	// pointing ORCHESTRATION_FILE at it.
+	if interval := os.Getenv("PERIODIC_NOOP_INTERVAL_SECS"); interval != "" {
+		orchestrationFile, cleanup, err := writeOrchestrationFileWithNoopInterval(driversTools, interval)
+		if err != nil {
+			log.Fatalf("setting periodicNoopIntervalSecs: %v", err)
+		}
+		defer cleanup()
+		env = append(env, fmt.Sprintf("ORCHESTRATION_FILE=%s", orchestrationFile))
+	}
+
 	// Notify before starting so a Ctrl-C during the (potentially slow) download
 	// and provisioning step still results in a clean teardown.
 	sig := make(chan os.Signal, 1)
@@ -97,6 +112,58 @@ func main() {
 	fmt.Println("\nSharded cluster is running. Press Ctrl-C to stop and tear it down.")
 	<-sig
 	teardown()
+}
+
+// writeOrchestrationFileWithNoopInterval copies the sharded_cluster "basic"
+// orchestration config used by drivers_orchestration.py and sets
+// periodicNoopIntervalSecs on every shard member's procParams. It writes the
+// result next to the original under configs/sharded_clusters/ (the only place
+// drivers_orchestration.py's ORCHESTRATION_FILE resolution will look) and
+// returns the filename to pass via ORCHESTRATION_FILE, plus a cleanup func
+// that removes the generated file.
+func writeOrchestrationFileWithNoopInterval(driversTools, intervalSecs string) (filename string, cleanup func(), err error) {
+	interval, err := strconv.Atoi(intervalSecs)
+	if err != nil {
+		return "", nil, fmt.Errorf("PERIODIC_NOOP_INTERVAL_SECS must be an integer: %w", err)
+	}
+
+	configsDir := filepath.Join(driversTools, ".evergreen", "orchestration", "configs", "sharded_clusters")
+	base, err := os.ReadFile(filepath.Join(configsDir, "basic.json"))
+	if err != nil {
+		return "", nil, err
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(base, &config); err != nil {
+		return "", nil, err
+	}
+
+	shards, _ := config["shards"].([]any)
+	for _, s := range shards {
+		shard, _ := s.(map[string]any)
+		shardParams, _ := shard["shardParams"].(map[string]any)
+		members, _ := shardParams["members"].([]any)
+		for _, m := range members {
+			member, _ := m.(map[string]any)
+			procParams, _ := member["procParams"].(map[string]any)
+			procParams["setParameter"] = map[string]any{
+				"periodicNoopIntervalSecs": interval,
+			}
+		}
+	}
+
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", nil, err
+	}
+
+	filename = "sharded-latest-det.json"
+	outPath := filepath.Join(configsDir, filename)
+	if err := os.WriteFile(outPath, out, 0o644); err != nil {
+		return "", nil, err
+	}
+
+	return filename, func() { os.Remove(outPath) }, nil
 }
 
 // run executes a command, wiring it to the current stdio, with the given env.
